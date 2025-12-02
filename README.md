@@ -42,6 +42,14 @@ This tool follows these precise color conversion steps:
 | :---: | :---: | :---: |
 | ![RAW](Samples/RAW.jpeg) | ![V-Log](Samples/V-Log.jpeg) | ![Class-Neg](Samples/FujiFilm%20Class-Neg.jpeg) |
 
+#### Accuracy Verification
+
+Comparison with Panasonic Lumix Real-time LUT.
+
+| In-Camera Real-time LUT | Raw Alchemy Processing |
+| :---: | :---: |
+| ![In-Camera](Samples/P1013122.jpg) | ![Raw Alchemy](Samples/Converted.jpg) |
+
 ### Installation
 
 Install Raw Alchemy:

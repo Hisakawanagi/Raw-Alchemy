@@ -42,6 +42,14 @@
 | :---: | :---: | :---: |
 | ![RAW](Samples/RAW.jpeg) | ![V-Log](Samples/V-Log.jpeg) | ![Class-Neg](Samples/FujiFilm%20Class-Neg.jpeg) |
 
+#### 精度验证
+
+与松下 Lumix 实时 LUT (Real-time LUT) 的对比。
+
+| 机内直出 (Real-time LUT) | Raw Alchemy 处理结果 |
+| :---: | :---: |
+| ![机内直出](Samples/P1013122.jpg) | ![Raw Alchemy](Samples/Converted.jpg) |
+
 ### 安装
 
 安装 Raw Alchemy：
