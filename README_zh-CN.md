@@ -56,24 +56,7 @@
 
 1.  前往 [**Releases**](https://github.com/shenmintao/raw-alchemy/releases) 页面。
 2.  下载适用于您系统的最新可执行文件 (例如 `RawAlchemy-vX.Y.Z-windows.exe` 或 `RawAlchemy-vX.Y.Z-linux`)。
-3.  **对于 Linux 用户 (重要)**: 镜头校正功能依赖 `lensfun` 库。为确保您拥有最新的相机和镜头配置文件，您**必须**从源码编译并安装其 `master` 分支，因为大多数包管理器中的版本已经过时。
-    *   首先，安装必要的编译工具和依赖：
-        ```bash
-        # 在 Debian/Ubuntu 上
-        sudo apt-get install build-essential cmake libglib2.0-dev
-        # 在 Fedora 上
-        sudo dnf install cmake glib2-devel
-        ```
-    *   接着，克隆、编译并安装 `lensfun`:
-        ```bash
-        git clone https://github.com/lensfun/lensfun.git
-        cd lensfun
-        mkdir build && cd build
-        cmake ..
-        make
-        sudo make install
-        ```
-4.  运行工具。详情请参阅 [使用方法](#使用方法) 部分。
+3.  运行工具。详情请参阅 [使用方法](#使用方法) 部分。
 
 ### 从源码安装 (开发者选项)
 
@@ -129,6 +112,39 @@ pip install .
 *   点击 **Start Processing** (开始处理) 按钮。
 *   底部的 **Log** (日志) 窗口将实时显示转换的进度和状态。
 *   处理完成后，日志中会出现 "processing complete" (处理完成) 的消息。
+
+### 高级用法：导入 Adobe 镜头配置文件 (LCP)
+
+Raw Alchemy 现在包含一个强大的脚本，用于转换和导入 Adobe LCP 格式的镜头配置文件。LCP 格式被 Adobe Camera Raw 和 DNG Converter 使用，这意味着您可以访问一个更庞大、更及时的镜头数据库。
+
+转换脚本 `lensfun-convert-lcp` 已随源代码一同打包。
+
+**步骤：**
+
+1.  **找到您的 LCP 文件。**
+    您可以通过安装免费的 [Adobe DNG Converter](https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html) 来获取它们。这些配置文件通常位于：
+    *   **Windows**: `C:\ProgramData\Adobe\CameraRaw\LensProfiles\1.0\`
+    *   **macOS**: `/Library/Application Support/Adobe/CameraRaw/LensProfiles/1.0/`
+
+2.  **运行转换脚本。**
+    该脚本位于 `src/raw_alchemy/vendor/lensfun/` 目录中。您需要安装 Python 才能运行它。
+
+    打开您的终端，进入 Raw Alchemy 项目目录，并根据您的操作系统运行相应的脚本：
+
+    ```bash
+    # 在 Windows 上
+    python src/raw_alchemy/vendor/lensfun/win-x86_64/lensfun-convert-lcp "C:\ProgramData\Adobe\CameraRaw\LensProfiles\1.0"
+
+    # 在 Linux 上
+    python3 src/raw_alchemy/vendor/lensfun/linux-x86_64/lensfun-convert-lcp /path/to/your/lcp/files
+    ```
+
+3.  **检查输出。**
+    脚本将在您用户的 Lensfun 数据库目录中创建一个名为 `_lcps.xml` 的文件。
+    *   **Windows**: `C:\Users\<您的用户名>\.local\share\lensfun\_lcps.xml`
+    *   **Linux**: `~/.local/share/lensfun/_lcps.xml`
+
+    一旦该文件就位，Raw Alchemy 将自动使用这些新的配置文件进行镜头校正。您可以使用 `--output` 参数指定不同的输出文件。更多详情，请使用 `--help` 参数运行脚本。
 
 ### CLI 用法
 

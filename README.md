@@ -56,24 +56,7 @@ For most users, the easiest way to use Raw Alchemy is to download the pre-compil
 
 1.  Go to the [**Releases**](https://github.com/shenmintao/raw-alchemy/releases) page.
 2.  Download the latest executable for your system (e.g., `RawAlchemy-vX.Y.Z-windows.exe` or `RawAlchemy-vX.Y.Z-linux`).
-3.  **For Linux users (IMPORTANT)**: Lens correction relies on the `lensfun` library. To ensure you have the latest camera and lens profiles, you **must** compile and install the `master` branch from source, as the version in most package managers is outdated.
-    *   First, install the necessary build tools and dependencies:
-        ```bash
-        # On Debian/Ubuntu
-        sudo apt-get install build-essential cmake libglib2.0-dev
-        # On Fedora
-        sudo dnf install cmake glib2-devel
-        ```
-    *   Next, clone, build, and install `lensfun`:
-        ```bash
-        git clone https://github.com/lensfun/lensfun.git
-        cd lensfun
-        mkdir build && cd build
-        cmake ..
-        make
-        sudo make install
-        ```
-4.  Run the tool. See the [Usage](#usage) section for details.
+3.  Run the tool. See the [Usage](#usage) section for details.
 
 ### Installation from Source (For Developers)
 
@@ -129,6 +112,39 @@ You can choose between two modes:
 *   Click the **Start Processing** button.
 *   The **Log** window at the bottom will display the real-time progress and status of the conversion.
 *   Once finished, a "processing complete" message will appear in the log.
+
+### Advanced Usage: Importing Adobe Lens Profiles (LCP)
+
+Raw Alchemy now includes a powerful script to convert and import lens profiles from Adobe's LCP format, which is used by Adobe Camera Raw and DNG Converter. This gives you access to a much larger and more up-to-date lens database.
+
+The conversion script `lensfun-convert-lcp` is bundled with the source code.
+
+**Steps:**
+
+1.  **Locate your LCP files.**
+    You can get them by installing the free [Adobe DNG Converter](https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html). The profiles are typically located in:
+    *   **Windows**: `C:\ProgramData\Adobe\CameraRaw\LensProfiles\1.0\`
+    *   **macOS**: `/Library/Application Support/Adobe/CameraRaw/LensProfiles/1.0/`
+
+2.  **Run the conversion script.**
+    The script is located in the `src/raw_alchemy/vendor/lensfun/` directory. You will need Python installed to run it.
+
+    Open your terminal, navigate to the Raw Alchemy project directory, and run the appropriate script for your OS:
+
+    ```bash
+    # On Windows
+    python src/raw_alchemy/vendor/lensfun/win-x86_64/lensfun-convert-lcp "C:\ProgramData\Adobe\CameraRaw\LensProfiles\1.0"
+
+    # On Linux
+    python3 src/raw_alchemy/vendor/lensfun/linux-x86_64/lensfun-convert-lcp /path/to/your/lcp/files
+    ```
+
+3.  **Check the output.**
+    The script will create a file named `_lcps.xml` in your user's Lensfun database directory.
+    *   **Windows**: `C:\Users\<YourUsername>\.local\share\lensfun\_lcps.xml`
+    *   **Linux**: `~/.local/share/lensfun/_lcps.xml`
+
+    Once this file is in place, Raw Alchemy will automatically use these new profiles for lens correction. You can specify a different output file using the `--output` argument. For more details, run the script with `--help`.
 
 ### CLI Usage
 
