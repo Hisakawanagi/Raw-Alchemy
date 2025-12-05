@@ -1,3 +1,4 @@
+import gc
 import rawpy
 import numpy as np
 import colour
@@ -68,11 +69,10 @@ def process_image(
 
     _log(f"🧪 [Raw Alchemy] Processing: {raw_path}")
 
-    # --- Step 1: 统一解码 (始终保持原始亮度) ---
-    _log(f"  🔹 [Step 1] Decoding RAW to Linear ProPhoto RGB...")
+    # --- Step 1: 统一解码 (优化内存) ---
+    _log(f"  🔹 [Step 1] Decoding RAW...")
     with rawpy.imread(raw_path) as raw:
-        # 关键修改：bright=1.0。无论手动自动，我们先拿最原始的数据。
-        # 这样能保证起点一致。
+        # prophoto_linear 是 uint16
         prophoto_linear = raw.postprocess(
             gamma=(1, 1),
             no_auto_bright=True,
@@ -83,7 +83,10 @@ def process_image(
             highlight_mode=2,
             demosaic_algorithm=rawpy.DemosaicAlgorithm.AAHD,
         )
-        img_linear = prophoto_linear.astype(np.float32) / 65535.0
+        img = prophoto_linear.astype(np.float32) / 65535.0
+        del prophoto_linear # <--- 关键：立即释放巨大的 uint16 数组
+        gc.collect()        # <--- 强制回收
+
         
     source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
 
@@ -97,7 +100,7 @@ def process_image(
         gain = 2.0 ** exposure
         
         # 应用增益
-        img_exposed = img_linear * gain
+        img *= gain
 
     else:
         # === 路径 B: 自动测光 ===
@@ -105,25 +108,25 @@ def process_image(
         
         # 为了复用 utils 里的函数 (假设它们返回的是处理后的图)，我们直接调用
         if metering_mode == 'center-weighted':
-            img_exposed = utils.auto_expose_center_weighted(img_linear, source_cs, target_gray=0.18, logger=_log)
+            img = utils.auto_expose_center_weighted(img, source_cs, target_gray=0.18, logger=_log)
         elif metering_mode == 'highlight-safe':
-            img_exposed = utils.auto_expose_highlight_safe(img_linear, clip_threshold=1.0, logger=_log)
+            img = utils.auto_expose_highlight_safe(img, clip_threshold=1.0, logger=_log)
         elif metering_mode == 'average':
-            img_exposed = utils.auto_expose_linear(img_linear, source_cs, target_gray=0.18, logger=_log)
+            img = utils.auto_expose_linear(img, source_cs, target_gray=0.18, logger=_log)
         else:
             # 默认混合模式
-            img_exposed = utils.auto_expose_hybrid(img_linear, source_cs, target_gray=0.18, logger=_log)
+            img = utils.auto_expose_hybrid(img, source_cs, target_gray=0.18, logger=_log)
 
     # --- Step 3: 镜头校正 ---
     if lens_correct:
         _log("  🔹 [Step 3] Applying Lens Correction...")
-        img_exposed = utils.apply_lens_correction(img_exposed, raw_path, custom_db_path=custom_db_path, logger=_log)
+        img = utils.apply_lens_correction(img, raw_path, custom_db_path=custom_db_path, logger=_log)
 
 
     # 经验值：饱和度 1.15 ~ 1.25，对比度 1.0 ~ 1.1
     # 这会让你的 RAW 转换结果在过 LUT 之前就拥有足够的"底料"
     _log("  🔹 [Step 3.5] Applying Camera-Match Boost...")
-    img_exposed = utils.apply_saturation_and_contrast(img_exposed, saturation=1.25, contrast=1.1)
+    img = utils.apply_saturation_and_contrast(img, saturation=1.25, contrast=1.1)
 
     # --- Step 4: 转换色彩空间 (Linear -> Log) ---
     log_color_space_name = LOG_TO_WORKING_SPACE.get(log_space)
@@ -135,30 +138,61 @@ def process_image(
     _log(f"  🔹 [Step 4] Color Transform (ProPhoto -> {log_color_space_name} -> {log_curve_name})")
 
     # 4.1 Gamut 变换
-    log_linear_image = colour.RGB_to_RGB(
-        img_exposed,
+    M = colour.matrix_RGB_to_RGB(
         colour.RGB_COLOURSPACES['ProPhoto RGB'],
         colour.RGB_COLOURSPACES[log_color_space_name],
     )
+    if not img.flags['C_CONTIGUOUS']:
+        img = np.ascontiguousarray(img)
+    utils.apply_matrix_inplace(img, M)
     # Log 编码前必须裁剪负值
-    log_linear_image = np.maximum(log_linear_image, 1e-6)
+    np.maximum(img, 1e-6, out=img)
 
     # 4.2 Curve 编码
-    log_image = colour.cctf_encoding(log_linear_image, function=log_curve_name)
-    image_to_save = log_image
+    img = colour.cctf_encoding(img, function=log_curve_name)
 
-    # --- Step 5: LUT (可选) ---
+    # --- Step 5: LUT (Numba In-Place) ---
     if lut_path:
         _log(f"  🔹 [Step 5] Applying LUT {lut_path}...")
         try:
             lut = colour.read_LUT(lut_path)
-            image_to_save = lut.apply(log_image)
-            image_to_save = np.clip(image_to_save, 0.0, 1.0) # LUT 后防溢出
+            
+            # 判断是否为标准的 3D LUT，如果是，则使用 Numba 加速
+            if isinstance(lut, colour.LUT3D):
+                # 必须确保输入内存连续，否则 Numba 可能会变慢或报错
+                if not img.flags['C_CONTIGUOUS']:
+                    img = np.ascontiguousarray(img)
+                
+                # 调用 Numba 核函数
+                utils.apply_lut_inplace(
+                    img, 
+                    lut.table, 
+                    lut.domain[0], 
+                    lut.domain[1]
+                )
+            else:
+                # 如果是 1D LUT 或 LUTSequence，回退到 colour 库自带方法
+                _log("    (Using standard colour library for non-3D LUT)")
+                img = lut.apply(img)
+
+            # LUT 后防溢出
+            np.clip(img, 0.0, 1.0, out=img)
+            
         except Exception as e:
             _log(f"  ❌ [Error] applying LUT: {e}")
+            import traceback
+            traceback.print_exc()
 
     # --- Step 6: 保存 ---
     _log(f"  💾 Saving to {output_path}...")
-    image_16bit = (image_to_save * 65535).astype(np.uint16)
-    tifffile.imwrite(output_path, image_16bit)
+    # 注意：TIFF 保存时通常需要转 uint16。
+    tifffile.imwrite(
+        output_path, 
+        (img * 65535).astype(np.uint16), # 这里还是会有短暂的内存峰值，但已经是最后一步
+        photometric='rgb'
+    )
+    
+    # 显式清理
+    del img
+    gc.collect()
     _log("  ✅ Done.")

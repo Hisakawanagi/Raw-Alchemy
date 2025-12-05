@@ -24,7 +24,8 @@ dependencies = [
     "scipy",
     "exifread",
     "Pillow",
-    "pyinstaller"
+    "pyinstaller",
+    "numba"
 ]
 
 [project.urls]
