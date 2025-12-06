@@ -75,7 +75,7 @@ download_and_extract_lensfun()
 # Enable strip on Linux and macOS for a smaller executable.
 # On Windows, stripping can sometimes cause issues with antivirus software
 # or runtime behavior, so it's safer to leave it disabled.
-strip_executable = True if sys.platform.startswith('linux') or sys.platform == 'darwin' else False
+strip_executable = True if sys.platform.startswith('linux') else False
 
 # --- Platform-specific binaries ---
 binaries_list = []
