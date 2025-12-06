@@ -52,7 +52,7 @@ class CustomBuildPy(build_py):
             print(f"Could not find download URL for {asset_name}", file=sys.stderr)
             sys.exit(1)
 
-        archive_path = "lensfun_archive"
+        archive_path = asset_name
         try:
             print(f"Downloading Lensfun for {system} from {download_url}...")
             with urllib.request.urlopen(download_url) as response, open(
