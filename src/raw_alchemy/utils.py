@@ -260,13 +260,13 @@ def auto_expose_hybrid(img_linear: np.ndarray, source_colorspace, target_gray: f
     
     # 3. 检查高光 (在采样图上检查即可)
     max_vals = np.max(sample, axis=2)
-    p99 = np.percentile(max_vals, 99.0)
+    p995 = np.percentile(max_vals, 99.5)
     
-    potential_peak = p99 * base_gain
+    potential_peak = p995 * base_gain
     max_allowed_peak = 6.0 
     
     if potential_peak > max_allowed_peak:
-        limited_gain = max_allowed_peak / p99
+        limited_gain = max_allowed_peak / p995
         logger(f"  🛡️  [Auto Exposure] Hybrid limited. (Desired: {base_gain:.2f} -> Actual: {limited_gain:.2f})")
         gain = limited_gain
     else:
@@ -287,7 +287,7 @@ def auto_expose_matrix(img_linear: np.ndarray, source_colorspace, target_gray: f
     4. 计算加权平均亮度并确定曝光增益。
     """
     # 1. 下采样以提高性能
-    sample = get_subsampled_view(img_linear, target_size=512)
+    sample = get_subsampled_view(img_linear)
     h, w, _ = sample.shape
     
     # 2. 计算亮度图
@@ -340,12 +340,12 @@ def auto_expose_matrix(img_linear: np.ndarray, source_colorspace, target_gray: f
 
     # 7. 与 Hybrid 类似的保护性削减
     max_vals = np.max(sample, axis=2)
-    p99 = np.percentile(max_vals, 99.0)
-    potential_peak = p99 * gain
+    p995 = np.percentile(max_vals, 99.5)
+    potential_peak = p995 * gain
     max_allowed_peak = 6.0
     
     if potential_peak > max_allowed_peak:
-        limited_gain = max_allowed_peak / p99
+        limited_gain = max_allowed_peak / p995
         logger(f"  🛡️  [Auto Exposure] Matrix limited. (Desired: {gain:.2f} -> Actual: {limited_gain:.2f})")
         gain = limited_gain
 
