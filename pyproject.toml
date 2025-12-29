@@ -23,7 +23,8 @@ dependencies = [
     "Pillow",
     "pillow-heif",
     "pyinstaller",
-    "numba"
+    "numba",
+    "matplotlib"
 ]
 
 [project.urls]

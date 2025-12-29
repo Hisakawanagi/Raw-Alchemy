@@ -38,7 +38,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'matplotlib',
         'pandas',
         'IPython',
         'PyQt5',

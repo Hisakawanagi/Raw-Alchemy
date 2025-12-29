@@ -8,6 +8,7 @@ import sys
 
 from raw_alchemy import config, orchestrator
 from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
+from raw_alchemy.preview import open_preview_window
 
 
 def resource_path(relative_path):
@@ -43,6 +44,9 @@ class GuiApplication(tk.Frame):
         # --- Queues ---
         # gui_queue: 仅用于主线程读取，更新 UI
         self.gui_queue = queue.Queue()
+        
+        # 预览窗口引用
+        self.preview_window = None
         
         self.create_widgets()
         
@@ -224,7 +228,10 @@ class GuiApplication(tk.Frame):
     def browse_input_file(self):
         exts = " ".join([f"*{e} *{e.upper()}" for e in SUPPORTED_RAW_EXTENSIONS])
         path = filedialog.askopenfilename(filetypes=[("RAW Images", exts), ("All Files", "*.*")])
-        if path: self.input_path_var.set(path)
+        if path:
+            self.input_path_var.set(path)
+            # 自动打开预览窗口
+            self.open_preview(path)
 
     def browse_input_folder(self):
         path = filedialog.askdirectory()
@@ -247,6 +254,33 @@ class GuiApplication(tk.Frame):
     def browse_lensfun_db(self):
         path = filedialog.askopenfilename(filetypes=[("Lensfun XML", "*.xml")])
         if path: self.custom_lensfun_db_path_var.set(path)
+    
+    def open_preview(self, raw_path):
+        """打开预览窗口"""
+        # 检查是否是支持的RAW文件
+        ext = os.path.splitext(raw_path)[1].lower()
+        if ext not in SUPPORTED_RAW_EXTENSIONS:
+            messagebox.showwarning("Warning", "Selected file is not a supported RAW format.")
+            return
+        
+        # 如果已有预览窗口且窗口仍然存在，重新加载图片
+        if self.preview_window and hasattr(self.preview_window, 'window'):
+            try:
+                # 检查窗口是否仍然存在
+                if self.preview_window.window.winfo_exists():
+                    # 重新加载新图片
+                    self.preview_window.load_new_image(raw_path)
+                    return
+            except:
+                pass
+        
+        # 打开新的预览窗口
+        try:
+            self.preview_window = open_preview_window(self.master, raw_path, self)
+        except Exception as e:
+            messagebox.showerror("Preview Error", f"Failed to open preview: {e}")
+            import traceback
+            traceback.print_exc()
 
     # --- Logic ---
 
