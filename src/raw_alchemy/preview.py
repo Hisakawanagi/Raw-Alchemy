@@ -64,7 +64,7 @@ class PreviewWindow:
         
         # 防抖动定时器
         self.debounce_timer = None
-        self.debounce_delay = 500  # 毫秒
+        self.debounce_delay = 200  # 毫秒
         
         # 创建UI
         self.create_widgets()
