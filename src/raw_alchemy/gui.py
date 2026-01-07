@@ -452,9 +452,10 @@ class InspectorPanel(ScrollArea):
         self.exp_card = SimpleCardWidget()
         exp_layout = QVBoxLayout(self.exp_card)
         
-        self.auto_exp_radio = SwitchButton(text=tr('auto_exposure'))
+        self.auto_exp_radio = SwitchButton()
         self.auto_exp_radio.setChecked(True)  # Default to Auto Exposure
         self.auto_exp_radio.checkedChanged.connect(self._on_exposure_mode_changed)
+        self._update_exposure_switch_text()
         
         self.metering_lbl = BodyLabel(tr('metering_mode'))
         self.metering_combo = ComboBox()
@@ -708,11 +709,19 @@ class InspectorPanel(ScrollArea):
         except Exception as e:
             InfoBar.warning(tr('db_cleared'), f"Warning: {str(e)}", parent=self)
 
+    def _update_exposure_switch_text(self):
+        """Update the switch button text based on its state"""
+        if self.auto_exp_radio.isChecked():
+            self.auto_exp_radio.setText(tr('auto_exposure'))
+        else:
+            self.auto_exp_radio.setText(tr('manual_exposure'))
+    
     def _update_exposure_ui_state(self):
         is_auto = self.auto_exp_radio.isChecked()
         self.metering_combo.setEnabled(is_auto)
         self.metering_lbl.setEnabled(is_auto)
         self.exp_slider.setEnabled(not is_auto)
+        self._update_exposure_switch_text()
 
     def _on_exposure_mode_changed(self):
         self._update_exposure_ui_state()

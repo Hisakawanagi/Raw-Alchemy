@@ -17,6 +17,7 @@ class Translator:
                 'histogram': 'Histogram',
                 'exposure': 'Exposure',
                 'auto_exposure': 'Auto Exposure',
+                'manual_exposure': 'Manual Exposure',
                 'metering_mode': 'Metering Mode',
                 'exposure_ev': 'Exposure EV',
                 'color_management': 'Color Management',
@@ -89,6 +90,7 @@ This will move the file to the recycle bin.''',
                 'histogram': '直方图',
                 'exposure': '曝光',
                 'auto_exposure': '自动曝光',
+                'manual_exposure': '手动曝光',
                 'metering_mode': '测光模式',
                 'exposure_ev': '曝光补偿 EV',
                 'color_management': '色彩管理',
@@ -200,3 +202,4 @@ def set_language(lang):
 
 def get_current_language():
     return _translator.current_lang
+
