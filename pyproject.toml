@@ -24,7 +24,9 @@ dependencies = [
     "pillow-heif",
     "pyinstaller",
     "numba",
-    "matplotlib"
+    "matplotlib",
+    "PyQt6-Fluent-Widgets",
+    "Send2Trash"
 ]
 
 [project.urls]

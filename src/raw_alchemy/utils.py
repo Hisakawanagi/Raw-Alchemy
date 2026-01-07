@@ -304,7 +304,7 @@ def apply_lut_inplace(img, lut_table, domain_min, domain_max):
         flat_img[i, 1] = g_val
         flat_img[i, 2] = b_val
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def apply_saturation_contrast_inplace(img, saturation, contrast, pivot, luma_coeffs):
     """
     原位应用饱和度和对比度。
@@ -342,6 +342,63 @@ def apply_saturation_contrast_inplace(img, saturation, contrast, pivot, luma_coe
             img[r, c, 0] = r_fin
             img[r, c, 1] = g_fin
             img[r, c, 2] = b_fin
+
+@njit(parallel=True, fastmath=True, cache=True)
+def apply_white_balance_inplace(img, r_gain, g_gain, b_gain):
+    """
+    Apply White Balance (RGB scaling).
+    """
+    rows, cols, _ = img.shape
+    for r in prange(rows):
+        for c in range(cols):
+            img[r, c, 0] *= r_gain
+            img[r, c, 1] *= g_gain
+            img[r, c, 2] *= b_gain
+
+@njit(parallel=True, fastmath=True, cache=True)
+def apply_highlight_shadow_inplace(img, highlight, shadow, luma_coeffs):
+    """
+    Apply Highlight and Shadow adjustment.
+    highlight: -1.0 to 1.0 (Recover to Blowout)
+    shadow: -1.0 to 1.0 (Crush to Lift)
+    """
+    rows, cols, _ = img.shape
+    cr, cg, cb = luma_coeffs[0], luma_coeffs[1], luma_coeffs[2]
+
+    for r in prange(rows):
+        for c in range(cols):
+            r_v = img[r, c, 0]
+            g_v = img[r, c, 1]
+            b_v = img[r, c, 2]
+            
+            lum = r_v * cr + g_v * cg + b_v * cb
+            
+            # Shadow Boost
+            if shadow != 0.0:
+                mask = (1.0 - lum)
+                if mask > 0:
+                    # Focus on deep shadows (mask^3)
+                    factor = 1.0 + shadow * (mask * mask * mask)
+                    r_v *= factor
+                    g_v *= factor
+                    b_v *= factor
+            
+            # Highlight Recovery/Boost
+            if highlight != 0.0:
+                 # Focus on bright highlights (lum^3)
+                 factor = 1.0 + highlight * (lum * lum * lum)
+                 r_v *= factor
+                 g_v *= factor
+                 b_v *= factor
+            
+            # Clip results
+            if r_v < 0.0: r_v = 0.0
+            if g_v < 0.0: g_v = 0.0
+            if b_v < 0.0: b_v = 0.0
+
+            img[r, c, 0] = r_v
+            img[r, c, 1] = g_v
+            img[r, c, 2] = b_v
 
 @njit(parallel=True, fastmath=True)
 def apply_gain_inplace(img, gain):
@@ -390,6 +447,64 @@ def bt709_to_srgb_inplace(img):
                 img[r, c, ch] = result
 
 # =========================================================
+# 直方图计算 (Numba 加速)
+# =========================================================
+
+@njit(parallel=True, fastmath=True, cache=True)
+def compute_histogram_channel(data, bins, min_val, max_val):
+    """
+    使用 numba 加速的单通道直方图计算
+    
+    Args:
+        data: 1D numpy array of float values
+        bins: number of bins
+        min_val: minimum value for histogram range
+        max_val: maximum value for histogram range
+    
+    Returns:
+        histogram counts as 1D array
+    """
+    hist = np.zeros(bins, dtype=np.int64)
+    bin_width = (max_val - min_val) / bins
+    
+    for i in prange(data.shape[0]):
+        val = data[i]
+        if min_val <= val <= max_val:
+            bin_idx = int((val - min_val) / bin_width)
+            # 处理边界情况：值正好等于 max_val
+            if bin_idx >= bins:
+                bin_idx = bins - 1
+            hist[bin_idx] += 1
+    
+    return hist
+
+def compute_histogram_fast(img_array, bins=100, sample_rate=4):
+    """
+    快速计算 RGB 三通道直方图（使用 numba 加速）
+    
+    Args:
+        img_array: HxWx3 numpy array with float values in range [0, 1]
+        bins: number of histogram bins
+        sample_rate: subsample rate (e.g., 4 means take every 4th pixel)
+    
+    Returns:
+        list of 3 histogram arrays (R, G, B) as float arrays
+    """
+    # 子采样以提高速度
+    sample = img_array[::sample_rate, ::sample_rate, :]
+    
+    hist_data = []
+    for channel in range(3):
+        # 展平通道数据
+        channel_data = sample[:, :, channel].ravel()
+        # 使用 numba 加速的直方图计算
+        hist = compute_histogram_channel(channel_data, bins, 0.0, 1.0)
+        # 转换为浮点数以便绘制
+        hist_data.append(hist.astype(np.float64))
+    
+    return hist_data
+
+# =========================================================
 # 辅助计算函数 (用于测光)
 # =========================================================
 
@@ -416,33 +531,77 @@ def get_subsampled_view(img, target_size=1024):
 def apply_saturation_and_contrast(img_linear, saturation=1.25, contrast=1.10, colourspace=None):
     """
     In-Place 应用饱和度和对比度。
-    
-    Args:
-        img_linear: 线性图像数据
-        saturation: 饱和度系数
-        contrast: 对比度系数
-        colourspace: 色彩空间对象，如果为 None 则使用 ProPhoto RGB
     """
     import colour
     
-    # 动态获取亮度系数
     if colourspace is None:
         colourspace = colour.RGB_COLOURSPACES['ProPhoto RGB']
     
     luma_coeffs = get_luminance_coeffs(colourspace).astype(np.float32)
     
-    # 确保连续，防止 Numba 变慢
     if not img_linear.flags['C_CONTIGUOUS']:
         img_linear = np.ascontiguousarray(img_linear)
         
     apply_saturation_contrast_inplace(
-        img_linear, 
-        float(saturation), 
-        float(contrast), 
-        0.18, # Pivot center
+        img_linear,
+        float(saturation),
+        float(contrast),
+        0.18,
         luma_coeffs
     )
-    return img_linear # 为了链式调用方便返回，但实际上是原地修改
+    return img_linear
+
+def apply_white_balance(img_linear, temp=0.0, tint=0.0):
+    """
+    Apply White Balance.
+    temp: -100 to 100 (Blue <-> Amber)
+    tint: -100 to 100 (Green <-> Magenta)
+    """
+    # Simple gain calculation
+    # Temp > 0: Warm (R+, B-)
+    # Temp < 0: Cool (R-, B+)
+    # Tint > 0: Magenta (G-)  -- Wait, usually tint + is magenta?
+    # Let's define: Tint > 0 (Magenta/Purple), Tint < 0 (Green)
+    # Standard: Tint slider usually goes Green (-) to Magenta (+)
+    
+    r_gain = 1.0
+    g_gain = 1.0
+    b_gain = 1.0
+    
+    # Temperature (strength factor 0.01 per unit)
+    t_val = temp * 0.005 # Sensitivity
+    r_gain += t_val
+    b_gain -= t_val
+    
+    # Tint
+    g_val = tint * 0.005
+    g_gain -= g_val # Tint + (Magenta) means Green decreases
+    
+    if not img_linear.flags['C_CONTIGUOUS']:
+        img_linear = np.ascontiguousarray(img_linear)
+        
+    apply_white_balance_inplace(img_linear, float(r_gain), float(g_gain), float(b_gain))
+    return img_linear
+
+def apply_highlight_shadow(img_linear, highlight=0.0, shadow=0.0, colourspace=None):
+    """
+    highlight: -100 to 100
+    shadow: -100 to 100
+    """
+    import colour
+    if colourspace is None:
+        colourspace = colour.RGB_COLOURSPACES['ProPhoto RGB']
+    luma_coeffs = get_luminance_coeffs(colourspace).astype(np.float32)
+
+    # Normalize inputs to -1.0 to 1.0 roughly
+    h_val = highlight / 100.0
+    s_val = shadow / 100.0
+    
+    if not img_linear.flags['C_CONTIGUOUS']:
+        img_linear = np.ascontiguousarray(img_linear)
+
+    apply_highlight_shadow_inplace(img_linear, float(h_val), float(s_val), luma_coeffs)
+    return img_linear
 
 # ----------------- 测光函数 (全部改为采样 + In-Place) -----------------
 

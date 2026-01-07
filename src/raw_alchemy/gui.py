@@ -1,495 +1,1278 @@
-import tkinter as tk
-from tkinter import filedialog, ttk, scrolledtext, messagebox
-import os
-import threading
-import queue
-import multiprocessing
 import sys
+import os
+import time
+import threading
+import multiprocessing
+import numpy as np
+import rawpy
+import colour
+import gc
+from typing import Optional, Dict
 
-from raw_alchemy import config, orchestrator, utils
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
+    QFileDialog, QListWidget, QListWidgetItem, QFrame, 
+    QSplitter, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout
+)
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QObject, QTimer, QEvent
+from PyQt6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QResizeEvent, QTransform
+
+from qfluentwidgets import (
+    FluentWindow, SubtitleLabel, PrimaryPushButton, PushButton, 
+    ComboBox, Slider, CaptionLabel, SwitchButton, StrongBodyLabel, 
+    BodyLabel, LineEdit, ToolButton, FluentIcon as FIF, 
+    CardWidget, SimpleCardWidget, ScrollArea, IndeterminateProgressRing, 
+    InfoBar, InfoBarPosition, Theme, setTheme, CheckBox
+)
+
+from raw_alchemy import config, utils, orchestrator, metering
 from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
-from raw_alchemy.preview import open_preview_window
 
-class GuiApplication(tk.Frame):
-    def __init__(self, master=None):
-        super().__init__(master)
-        self.master = master
-        self.master.title("Raw Alchemy")
-        self.master.geometry("1000x950")
-        
-        # --- Icon Setting ---
-        try:
-            if sys.platform.startswith('win'):
-                icon_path = utils.resource_path("icon.ico")
-                if os.path.exists(icon_path): self.master.iconbitmap(icon_path)
-            else:
-                icon_path = utils.resource_path("icon.png")
-                if os.path.exists(icon_path):
-                    icon_image = tk.PhotoImage(file=icon_path)
-                    self.master.iconphoto(True, icon_image)
-        except Exception as e:
-            print(f"Icon load warning: {e}")
+# ==============================================================================
+#                               Worker Threads
+# ==============================================================================
 
-        self.pack(fill="both", expand=True)
-        
-        # --- Queues ---
-        # gui_queue: 仅用于主线程读取，更新 UI
-        self.gui_queue = queue.Queue()
-        
-        # 预览窗口引用
-        self.preview_window = None
-        
-        self.create_widgets()
-        
-        # Start the GUI update loop
-        self.master.after(100, self.process_gui_queue)
+class ThumbnailWorker(QThread):
+    """Scan folder and generate thumbnails"""
+    thumbnail_ready = pyqtSignal(str, QImage)
+    finished_scanning = pyqtSignal()
 
-    def create_widgets(self):
-        # --- Frame for IO ---
-        io_frame = ttk.LabelFrame(self, text="Input / Output Source", padding=(10, 5))
-        io_frame.pack(padx=10, pady=5, fill="x")
+    def __init__(self, folder_path):
+        super().__init__()
+        self.folder_path = folder_path
+        self.stopped = False
 
-        # Input
-        ttk.Label(io_frame, text="Input Path:").grid(row=0, column=0, sticky="w")
-        self.input_path_var = tk.StringVar()
-        ttk.Entry(io_frame, textvariable=self.input_path_var, width=60).grid(row=0, column=1, padx=5, sticky="ew")
-        
-        btn_f1 = ttk.Frame(io_frame)
-        btn_f1.grid(row=0, column=2, padx=5)
-        ttk.Button(btn_f1, text="File...", command=self.browse_input_file).pack(side="left")
-        ttk.Button(btn_f1, text="Folder...", command=self.browse_input_folder).pack(side="left", padx=2)
-
-        # Output
-        ttk.Label(io_frame, text="Output Path:").grid(row=1, column=0, sticky="w")
-        self.output_path_var = tk.StringVar()
-        ttk.Entry(io_frame, textvariable=self.output_path_var, width=60).grid(row=1, column=1, padx=5, sticky="ew")
-
-        btn_f2 = ttk.Frame(io_frame)
-        btn_f2.grid(row=1, column=2, padx=5)
-        ttk.Button(btn_f2, text="Save As...", command=self.browse_output_file).pack(side="left")
-        ttk.Button(btn_f2, text="Folder...", command=self.browse_output_folder).pack(side="left", padx=2)
-        
-        # Output Format
-        ttk.Label(io_frame, text="Output Format:").grid(row=2, column=0, sticky="w", pady=5)
-        self.output_format_var = tk.StringVar(value='tif')
-        ttk.OptionMenu(io_frame, self.output_format_var, 'tif', 'tif', 'heif', 'jpg').grid(row=2, column=1, sticky="w", padx=5)
-        self.output_format_var.trace_add("write", self.on_output_format_change)
-        
-        io_frame.columnconfigure(1, weight=1)
-
-        # --- Frame for Processing Settings ---
-        settings_frame = ttk.LabelFrame(self, text="Processing Core", padding=(10, 5))
-        settings_frame.pack(padx=10, pady=5, fill="x")
-
-        # Row 0: Log Space
-        ttk.Label(settings_frame, text="Log Space:").grid(row=0, column=0, sticky="w", pady=5)
-        self.log_space_var = tk.StringVar(value=list(config.LOG_TO_WORKING_SPACE.keys())[0])
-        ttk.OptionMenu(settings_frame, self.log_space_var, self.log_space_var.get(), *config.LOG_TO_WORKING_SPACE.keys()).grid(row=0, column=1, sticky="w", padx=5)
-
-        # Row 1: LUT Folder
-        ttk.Label(settings_frame, text="LUT Folder:").grid(row=1, column=0, sticky="w", pady=5)
-        self.lut_folder_var = tk.StringVar()
-        ttk.Entry(settings_frame, textvariable=self.lut_folder_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=5)
-        ttk.Button(settings_frame, text="Browse...", command=self.browse_lut_folder).grid(row=1, column=3, sticky="ew", padx=5)
-        
-        # Row 1.5: LUT Selection
-        ttk.Label(settings_frame, text="Select LUT:").grid(row=2, column=0, sticky="w", pady=5)
-        self.lut_file_var = tk.StringVar()
-        self.lut_dropdown = ttk.Combobox(settings_frame, textvariable=self.lut_file_var, state="readonly")
-        self.lut_dropdown.grid(row=2, column=1, columnspan=3, sticky="ew", padx=5)
-        self.lut_dropdown['values'] = []
-
-        # Row 3: CPU Jobs
-        ttk.Label(settings_frame, text="CPU Threads:").grid(row=3, column=0, sticky="w", pady=5)
-        self.jobs_var = tk.IntVar(value=min(4, multiprocessing.cpu_count()))
-        ttk.Spinbox(settings_frame, from_=1, to=multiprocessing.cpu_count(), textvariable=self.jobs_var, width=5).grid(row=3, column=1, sticky="w", padx=5)
-
-        settings_frame.columnconfigure(1, weight=1)
-        settings_frame.columnconfigure(2, weight=1)
-
-        # --- Frame for Lens Correction ---
-        lens_frame = ttk.LabelFrame(self, text="Lens Correction", padding=(10, 5))
-        lens_frame.pack(padx=10, pady=5, fill="x")
-
-        # Row 0: Toggle
-        self.lens_correction_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(lens_frame, text="Apply Lens Correction", variable=self.lens_correction_var, command=self.toggle_lens_db_controls).grid(row=0, column=0, columnspan=4, sticky="w", pady=5)
-
-        # Row 1: Lensfun DB
-        self.lens_db_label = ttk.Label(lens_frame, text="Custom Lens DB (XML):")
-        self.lens_db_label.grid(row=1, column=0, sticky="w", pady=5)
-        self.custom_lensfun_db_path_var = tk.StringVar()
-        self.lens_db_entry = ttk.Entry(lens_frame, textvariable=self.custom_lensfun_db_path_var)
-        self.lens_db_entry.grid(row=1, column=1, columnspan=2, sticky="ew", padx=5)
-        self.lens_db_button = ttk.Button(lens_frame, text="Browse...", command=self.browse_lensfun_db)
-        self.lens_db_button.grid(row=1, column=3, sticky="ew", padx=5)
-
-        lens_frame.columnconfigure(1, weight=1)
-        lens_frame.columnconfigure(2, weight=1)
-
-        # --- Frame for Exposure ---
-        exp_frame = ttk.LabelFrame(self, text="Exposure Control", padding=(10, 5))
-        exp_frame.pack(padx=10, pady=5, fill="x")
-
-        self.exposure_mode_var = tk.StringVar(value="Auto")
-        
-        # Use grid layout for two rows
-        exp_frame.columnconfigure(1, weight=1)
-
-        # --- Row 0: Auto ---
-        auto_frame = ttk.Frame(exp_frame)
-        auto_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
-        ttk.Radiobutton(auto_frame, text="Auto Exposure: ", variable=self.exposure_mode_var, value="Auto", command=self.toggle_exposure_controls).pack(side="left")
-        
-        self.auto_opts_frame = ttk.Frame(auto_frame)
-        self.auto_opts_frame.pack(padx=10, pady=5, fill="x")
-        self.metering_mode_var = tk.StringVar(value='matrix')
-        ttk.OptionMenu(self.auto_opts_frame, self.metering_mode_var, 'matrix', *config.METERING_MODES).grid(row=0, column=1, sticky="w", padx=5)
-
-        # --- Row 1: Manual ---
-        manual_frame = ttk.Frame(exp_frame)
-        manual_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
-        ttk.Radiobutton(manual_frame, text="Manual EV: ", variable=self.exposure_mode_var, value="Manual", command=self.toggle_exposure_controls).pack(side="left")
-
-        self.manual_opts_frame = ttk.Frame(manual_frame)
-        self.manual_opts_frame.pack(side="left", padx=10, fill="x", expand=True)
-        
-        self.exposure_stops_var = tk.DoubleVar(value=0.0)
-        self.exposure_scale = ttk.Scale(self.manual_opts_frame, from_=-10.0, to=10.0, variable=self.exposure_stops_var, command=lambda v: self.exposure_stops_var.set(round(float(v), 2)))
-        self.exposure_scale.pack(side="left", fill="x", expand=True)
-        ttk.Entry(self.manual_opts_frame, textvariable=self.exposure_stops_var, width=6).pack(side="left", padx=5)
-        
-        self.toggle_exposure_controls()
-        self.toggle_lens_db_controls()
-
-        # --- Log & Progress ---
-        log_frame = ttk.Frame(self)
-        log_frame.pack(padx=10, pady=5, fill="both", expand=True)
-
-        self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state="disabled", height=10, font=("Consolas", 9))
-        self.log_text.pack(fill="both", expand=True)
-        
-        # Tags for coloring logs
-        self.log_text.tag_config("ERROR", foreground="red")
-        self.log_text.tag_config("SUCCESS", foreground="green")
-        self.log_text.tag_config("INFO", foreground="blue")
-        self.log_text.tag_config("ID", foreground="gray")
-
-        # Progress Bar & Actions
-        action_frame = ttk.Frame(self)
-        action_frame.pack(padx=10, pady=10, fill="x")
-        
-        self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(action_frame, variable=self.progress_var, maximum=100, length=400)
-        self.progress_bar.pack(side="left")
-        
-        self.progress_label = ttk.Label(action_frame, text="Ready", width=16, anchor='w')
-        self.progress_label.pack(side="left", padx=(10, 0))
-
-        self.start_button = ttk.Button(action_frame, text="Start Processing", command=self.start_processing_thread)
-        self.start_button.pack(side="right")
-
-    def on_output_format_change(self, *args):
-        # 只有当输出路径是文件（有扩展名）时才自动替换扩展名
-        # 如果是文件夹，则不动
-        current_path = self.output_path_var.get()
-        if not current_path: return
-        
-        if os.path.isdir(current_path):
-            return # 是文件夹，不改
-            
-        root, ext = os.path.splitext(current_path)
-        if ext: # 看起来像是个文件
-            new_ext = self.output_format_var.get()
-            # 简单映射
-            if new_ext == 'heif': new_ext = '.heif'
-            elif new_ext == 'tif': new_ext = '.tif'
-            elif new_ext == 'jpg': new_ext = '.jpg'
-            self.output_path_var.set(root + new_ext)
-
-    def toggle_exposure_controls(self):
-        mode = self.exposure_mode_var.get()
-        if mode == "Auto":
-            for child in self.auto_opts_frame.winfo_children(): child.configure(state="normal")
-            for child in self.manual_opts_frame.winfo_children(): child.configure(state="disabled")
-        else:
-            for child in self.auto_opts_frame.winfo_children(): child.configure(state="disabled")
-            for child in self.manual_opts_frame.winfo_children(): child.configure(state="normal")
-
-    def toggle_lens_db_controls(self):
-        state = "normal" if self.lens_correction_var.get() else "disabled"
-        self.lens_db_label.configure(state=state)
-        self.lens_db_entry.configure(state=state)
-        self.lens_db_button.configure(state=state)
-
-    # --- Browsing ---
-    def browse_input_file(self):
-        exts = " ".join([f"*{e} *{e.upper()}" for e in SUPPORTED_RAW_EXTENSIONS])
-        path = filedialog.askopenfilename(filetypes=[("RAW Images", exts), ("All Files", "*.*")])
-        if path:
-            self.input_path_var.set(path)
-            # 自动打开预览窗口
-            self.open_preview(path)
-
-    def browse_input_folder(self):
-        path = filedialog.askdirectory()
-        if path: self.input_path_var.set(path)
-
-    def browse_output_file(self):
-        fmt = self.output_format_var.get()
-        ext = f".{fmt}"
-        path = filedialog.asksaveasfilename(defaultextension=ext, filetypes=[(f"{fmt.upper()} Image", f"*{ext}")])
-        if path: self.output_path_var.set(path)
-
-    def browse_output_folder(self):
-        path = filedialog.askdirectory()
-        if path: self.output_path_var.set(path)
-
-    def browse_lut_folder(self):
-        """选择LUT文件夹并扫描其中的.cube文件"""
-        path = filedialog.askdirectory(title="Select LUT Folder")
-        if path:
-            self.lut_folder_var.set(path)
-            self.scan_lut_files(path)
-    
-    def scan_lut_files(self, folder_path):
-        """扫描文件夹中的所有.cube文件并更新下拉框"""
-        try:
-            # 获取文件夹中所有.cube文件
-            lut_files = []
-            if os.path.isdir(folder_path):
-                for file in os.listdir(folder_path):
-                    if file.lower().endswith('.cube'):
-                        lut_files.append(file)
-            
-            # 按文件名排序
-            lut_files.sort()
-            
-            # 更新下拉框
-            self.lut_dropdown['values'] = lut_files
-            
-            # 如果有LUT文件，默认选择第一个
-            if lut_files:
-                self.lut_file_var.set(lut_files[0])
-            else:
-                self.lut_file_var.set('')
-                messagebox.showinfo("Info", "No .cube files found in the selected folder.")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to scan LUT folder: {e}")
-
-    def get_selected_lut_path(self):
-        """获取当前选择的LUT文件的完整路径"""
-        folder = self.lut_folder_var.get()
-        lut_file = self.lut_file_var.get()
-        
-        if folder and lut_file:
-            full_path = os.path.join(folder, lut_file)
-            if os.path.isfile(full_path):
-                return full_path
-        return None
-    
-    def browse_lensfun_db(self):
-        path = filedialog.askopenfilename(filetypes=[("Lensfun XML", "*.xml")])
-        if path: self.custom_lensfun_db_path_var.set(path)
-    
-    def open_preview(self, raw_path):
-        """打开预览窗口"""
-        # 检查是否是支持的RAW文件
-        ext = os.path.splitext(raw_path)[1].lower()
-        if ext not in SUPPORTED_RAW_EXTENSIONS:
-            messagebox.showwarning("Warning", "Selected file is not a supported RAW format.")
+    def run(self):
+        if not os.path.exists(self.folder_path):
             return
+
+        files = sorted([f for f in os.listdir(self.folder_path) 
+                        if os.path.splitext(f)[1].lower() in SUPPORTED_RAW_EXTENSIONS])
         
-        # 如果已有预览窗口且窗口仍然存在，重新加载图片
-        if self.preview_window and hasattr(self.preview_window, 'window'):
+        for f in files:
+            if self.stopped: break
+            full_path = os.path.join(self.folder_path, f)
             try:
-                # 检查窗口是否仍然存在
-                if self.preview_window.window.winfo_exists():
-                    # 重新加载新图片
-                    self.preview_window.load_new_image(raw_path)
-                    return
+                # Attempt to use rawpy to extract thumbnail
+                with rawpy.imread(full_path) as raw:
+                    try:
+                        thumb = raw.extract_thumb()
+                    except rawpy.LibRawNoThumbnailError:
+                        thumb = None
+                    
+                    if thumb:
+                        if thumb.format == rawpy.ThumbFormat.JPEG:
+                            image = QImage()
+                            image.loadFromData(thumb.data)
+                        elif thumb.format == rawpy.ThumbFormat.BITMAP:
+                             # Handle bitmap if necessary, or skip
+                             continue
+                    else:
+                        # Fallback or skip
+                        continue
+
+                    if not image.isNull():
+                        # Handle rotation based on flip value
+                        orientation = raw.sizes.flip
+                        if orientation == 3:
+                            image = image.transformed(QTransform().rotate(180))
+                        elif orientation == 5:
+                            image = image.transformed(QTransform().rotate(-90))
+                        elif orientation == 6:
+                            image = image.transformed(QTransform().rotate(90))
+
+                        # Scale down
+                        scaled = image.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        self.thumbnail_ready.emit(full_path, scaled)
+            except Exception as e:
+                print(f"Error generating thumb for {f}: {e}")
+                continue
+        
+        self.finished_scanning.emit()
+
+    def stop(self):
+        self.stopped = True
+
+class ImageProcessor(QThread):
+    """
+    Handles the heavy lifting of the image pipeline.
+    Modes:
+    1. 'load': Load RAW -> Demosaic -> Lens Correction (Cache this stage)
+    2. 'process': Cached Linear -> Exp/WB/Effects -> Log/LUT -> Display
+    """
+    result_ready = pyqtSignal(np.ndarray, np.ndarray, str) # display_image, histogram_data, image_path
+    original_ready = pyqtSignal(np.ndarray, str) # original_image, image_path
+    load_finished = pyqtSignal()
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.mode = 'idle'
+        self.running_mode = 'idle'
+        self.params = {}
+        self.params_dirty = False
+        self.raw_path = None
+        self.processing_path = None  # Track which image is being processed
+        
+        # Caches
+        self.cached_linear = None # After demosaic
+        self.cached_corrected = None # After lens correction
+        self.cached_lens_key = None # (enable, db_path)
+        self.exif_data = None
+
+    def load_image(self, path):
+        self.raw_path = path
+        self.processing_path = path  # Mark which image we're processing
+        self.mode = 'load'
+        if not self.isRunning():
+            self.start()
+
+    def update_preview(self, params):
+        self.params = params
+        self.params_dirty = True
+        self.mode = 'process'
+        if not self.isRunning():
+            self.params_dirty = False
+            self.start()
+
+    def run(self):
+        self.running_mode = self.mode
+        try:
+            if self.mode == 'load':
+                self._do_load()
+            elif self.mode == 'process':
+                self._do_process()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error_occurred.emit(str(e))
+
+    def _do_load(self):
+        if not self.raw_path: return
+        
+        # Store the path we're processing
+        current_path = self.raw_path
+        
+        with rawpy.imread(self.raw_path) as raw:
+            self.exif_data = utils.extract_lens_exif(raw)
+            # Use half_size for faster preview
+            raw_post = raw.postprocess(
+                gamma=(1, 1),
+                no_auto_bright=True,
+                use_camera_wb=True,
+                output_bps=16,
+                output_color=rawpy.ColorSpace.ProPhoto,
+                bright=1.0,
+                highlight_mode=2,
+                demosaic_algorithm=rawpy.DemosaicAlgorithm.AAHD,
+                half_size=True
+            )
+            img = raw_post.astype(np.float32) / 65535.0
+            
+            # Downscale if still too big for 1080p preview (optional optimization)
+            h, w = img.shape[:2]
+            max_dim = 2048
+            if max(h, w) > max_dim:
+                from scipy.ndimage import zoom
+                scale = max_dim / max(h, w)
+                img = zoom(img, (scale, scale, 1), order=1)
+                
+            self.cached_linear = img
+            self.cached_corrected = None
+            self.cached_lens_key = None
+            
+            # Generate Original Preview with Auto Exposure, Lens Correction, and Camera Boost
+            # This represents what the camera would show with auto settings
+            orig_preview = img.copy()
+            
+            # 1. Apply Lens Correction (if EXIF data available)
+            if self.exif_data:
+                orig_preview = utils.apply_lens_correction(
+                    orig_preview,
+                    self.exif_data,
+                    custom_db_path=None
+                )
+            
+            # 2. Apply Auto Exposure (Matrix metering by default)
+            source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
+            class DummyLogger:
+                def info(self, *args, **kwargs):
+                    pass
+            metering.apply_auto_exposure(orig_preview, source_cs, 'matrix', logger=DummyLogger())
+            
+            # 3. Apply Camera Boost (Saturation and Contrast)
+            utils.apply_saturation_and_contrast(orig_preview, saturation=1.25, contrast=1.1)
+            
+            # 4. Convert to sRGB for display
+            utils.bt709_to_srgb_inplace(orig_preview)
+            orig_preview = np.clip(orig_preview, 0, 1)
+            orig_uint8 = (orig_preview * 255).astype(np.uint8)
+            self.original_ready.emit(orig_uint8, current_path)
+            
+            self.load_finished.emit()
+
+    def _do_process(self):
+        # Fallback: If we are in process mode but haven't loaded data yet (race condition fix)
+        if self.cached_linear is None:
+            if self.raw_path:
+                self._do_load()
+            
+            if self.cached_linear is None:
+                return
+        
+        # Make a local copy of params to avoid race conditions
+        params = self.params.copy()
+        
+        # 1. Lens Correction Check
+        current_lens_key = (params.get('lens_correct'), params.get('custom_db_path'))
+        
+        img = None
+        if current_lens_key != self.cached_lens_key or self.cached_corrected is None:
+            # Re-run lens correction
+            temp = self.cached_linear.copy()
+            if params.get('lens_correct') and self.exif_data:
+                temp = utils.apply_lens_correction(
+                    temp,
+                    self.exif_data,
+                    custom_db_path=params.get('custom_db_path')
+                )
+            self.cached_corrected = temp
+            self.cached_lens_key = current_lens_key
+        
+        # Start from corrected base
+        img = self.cached_corrected.copy()
+        
+        # 2. Exposure
+        if params.get('exposure_mode') == 'Manual':
+            gain = 2.0 ** params.get('exposure', 0.0)
+            utils.apply_gain_inplace(img, gain)
+        else:
+             # Auto exposure
+             source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
+             mode = params.get('metering_mode', 'matrix')
+             # Create a dummy logger object with info method
+             class DummyLogger:
+                 def info(self, *args, **kwargs):
+                     pass
+             metering.apply_auto_exposure(img, source_cs, mode, logger=DummyLogger())
+
+        # 3. White Balance
+        temp_val = params.get('wb_temp', 0.0)
+        tint = params.get('wb_tint', 0.0)
+        utils.apply_white_balance(img, temp_val, tint)
+
+        # 4. Highlight / Shadow
+        hl = params.get('highlight', 0.0)
+        sh = params.get('shadow', 0.0)
+        utils.apply_highlight_shadow(img, hl, sh)
+
+        # 5. Saturation / Contrast
+        sat = params.get('saturation', 1.0)
+        con = params.get('contrast', 1.0)
+        utils.apply_saturation_and_contrast(img, saturation=sat, contrast=con)
+
+        # 6. Log Transform
+        log_space = params.get('log_space')
+        if log_space and log_space != 'None':
+             log_color_space = config.LOG_TO_WORKING_SPACE.get(log_space)
+             log_curve = config.LOG_ENCODING_MAP.get(log_space, log_space)
+             
+             if log_color_space:
+                 M = colour.matrix_RGB_to_RGB(
+                     colour.RGB_COLOURSPACES['ProPhoto RGB'],
+                     colour.RGB_COLOURSPACES[log_color_space]
+                 )
+                 if not img.flags['C_CONTIGUOUS']: img = np.ascontiguousarray(img)
+                 utils.apply_matrix_inplace(img, M)
+                 np.maximum(img, 1e-6, out=img)
+                 img = colour.cctf_encoding(img, function=log_curve)
+        
+        # 7. LUT
+        lut_path = params.get('lut_path')
+        if lut_path and os.path.exists(lut_path):
+            try:
+                lut = colour.read_LUT(lut_path)
+                if isinstance(lut, colour.LUT3D):
+                    if not img.flags['C_CONTIGUOUS']: img = np.ascontiguousarray(img)
+                    if img.dtype != np.float32: img = img.astype(np.float32)
+                    if lut.table.dtype != np.float32: lut.table = lut.table.astype(np.float32)
+                    utils.apply_lut_inplace(img, lut.table, lut.domain[0], lut.domain[1])
+                else:
+                    img = lut.apply(img)
             except:
                 pass
+
+        # 8. Display Transform (to sRGB)
+        # We need sRGB for display. If we are in Log space, we just display as is (Log looks flat)
+        # If user selected "None" log space, we are in ProPhoto Linear. We need to convert to sRGB for display.
+        # However, usually Log/LUT pipeline outputs display referred or Log.
+        # For this preview:
+        # If Log is applied -> Display as is (or if LUT applied, it handles it)
+        # If Log is None -> Convert ProPhoto Linear -> sRGB
         
-        # 打开新的预览窗口
-        try:
-            self.preview_window = open_preview_window(self.master, raw_path, self)
-        except Exception as e:
-            messagebox.showerror("Preview Error", f"Failed to open preview: {e}")
-            import traceback
-            traceback.print_exc()
+        if not log_space or log_space == 'None':
+             utils.bt709_to_srgb_inplace(img)
+        
+        img = np.clip(img, 0, 1)
+        
+        # Store float version for histogram before converting to uint8
+        img_float = img.copy()
+        
+        # Convert to uint8 for QImage
+        img_uint8 = (img * 255).astype(np.uint8)
+        
+        # Emit with the path being processed
+        self.result_ready.emit(img_uint8, img_float, self.processing_path)
 
-    # --- Logic ---
 
-    def log_gui(self, msg, level="NORMAL", file_id=None):
-        """将消息放入 GUI 队列"""
-        self.gui_queue.put({
-            'type': 'log', 
-            'msg': msg, 
-            'level': level, 
-            'id': file_id
-        })
+# ==============================================================================
+#                               UI Components
+# ==============================================================================
 
-    def update_progress(self, current, total):
-        """将进度信息放入 GUI 队列"""
-        self.gui_queue.put({
-            'type': 'progress',
-            'current': current,
-            'total': total
-        })
+class HistogramWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(150)
+        self.hist_data = None
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-    def process_gui_queue(self):
-        """主线程定时器：处理队列中的 UI 更新请求"""
-        try:
-            while True:
-                item = self.gui_queue.get_nowait()
-                
-                if item['type'] == 'log':
-                    self.log_text.config(state="normal")
-                    
-                    # 插入 ID (灰色)
-                    if item.get('id'):
-                        self.log_text.insert(tk.END, f"[{item['id']}] ", "ID")
-                    
-                    # 插入消息
-                    tag = item.get('level', 'NORMAL')
-                    self.log_text.insert(tk.END, f"{item['msg']}\n", tag)
-                    
-                    self.log_text.see(tk.END)
-                    self.log_text.config(state="disabled")
-                
-                elif item['type'] == 'progress':
-                    curr = item['current']
-                    total = item['total']
-                    pct = (curr / total) * 100 if total > 0 else 0
-                    self.progress_var.set(pct)
-                    self.progress_label.config(text=f"{curr}/{total}")
-
-        except queue.Empty:
-            pass
-        finally:
-            self.master.after(50, self.process_gui_queue)
-
-    def start_processing_thread(self):
-        if not self.input_path_var.get() or not self.output_path_var.get():
-            messagebox.showerror("Error", "Please select both Input and Output paths.")
+    def update_data(self, img_array):
+        # 使用 numba 加速的直方图计算
+        if img_array is None:
             return
-
-        self.start_button.config(state="disabled")
-        self.log_text.config(state="normal")
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state="disabled")
-        self.progress_var.set(0)
-        self.progress_label.config(text="Initializing...")
         
-        # 启动工作线程
-        t = threading.Thread(target=self.run_orchestrator)
-        t.daemon = True
-        t.start()
+        try:
+             # img_array is float 0-1
+             # 使用 utils 中的快速直方图计算函数
+             self.hist_data = utils.compute_histogram_fast(img_array, bins=100, sample_rate=4)
+             self.update()
+        except Exception as e:
+             print(f"Histogram update error: {e}")
+             import traceback
+             traceback.print_exc()
 
-    def run_orchestrator(self):
-        # 1. 收集参数
-        params = {
-            'input_path': self.input_path_var.get(),
-            'output_path': self.output_path_var.get(),
-            'log_space': self.log_space_var.get(),
-            'output_format': self.output_format_var.get(),
-            'lut_path': self.get_selected_lut_path(),
-            'custom_db_path': self.custom_lensfun_db_path_var.get() or None,
-            'jobs': self.jobs_var.get(),
-            'lens_correct': self.lens_correction_var.get()
+    def paintEvent(self, event):
+        if not self.hist_data:
+            return
+        
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        w = self.width()
+        h = self.height()
+        
+        # 检查是否有有效数据
+        try:
+            max_val = max([np.max(hist) for hist in self.hist_data]) if self.hist_data else 1
+            if max_val == 0 or max_val < 1e-10:
+                max_val = 1
+        except Exception as e:
+            print(f"Error computing max_val: {e}")
+            return
+        
+        colors = [QColor(255, 50, 50, 180), QColor(50, 255, 50, 180), QColor(50, 50, 255, 180)]
+        
+        for i, hist in enumerate(self.hist_data):
+            if len(hist) == 0:
+                continue
+                
+            path_color = colors[i]
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(path_color)
+            
+            bin_w = w / len(hist)
+            
+            # Draw bars (or polygon)
+            from PyQt6.QtGui import QPolygonF
+            from PyQt6.QtCore import QPointF
+            
+            points = [QPointF(0, h)]
+            for j, val in enumerate(hist):
+                x = j * bin_w
+                y = h - (float(val) / max_val * h)
+                points.append(QPointF(x, y))
+            points.append(QPointF(w, h))
+            
+            painter.drawPolygon(QPolygonF(points))
+
+
+class GalleryItem(QWidget):
+    """Custom widget for gallery item (Image + Text)"""
+    def __init__(self, path, pixmap, parent=None):
+        super().__init__(parent)
+        self.path = path
+        self.base_name = os.path.basename(path)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.img_label = QLabel()
+        self.img_label.setPixmap(pixmap)
+        self.img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.img_label.setFixedSize(140, 100)
+        self.img_label.setScaledContents(True)
+        
+        # Text label with green dot indicator
+        self.text_label = CaptionLabel(self.base_name)
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        layout.addWidget(self.img_label)
+        layout.addWidget(self.text_label)
+    
+    def set_marked(self, marked):
+        """Show or hide the green dot indicator in the filename"""
+        if marked:
+            self.text_label.setText(f"🟢 {self.base_name}")
+        else:
+            self.text_label.setText(self.base_name)
+
+class InspectorPanel(ScrollArea):
+    """Right side control panel"""
+    param_changed = pyqtSignal(dict)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view = QWidget()
+        self.view.setObjectName("view")
+        self.setWidget(self.view)
+        self.setWidgetResizable(True)
+        self.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        self.view.setStyleSheet("#view { background-color: transparent; }")
+        
+        self.v_layout = QVBoxLayout(self.view)
+        self.v_layout.setSpacing(20)
+        self.v_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # --- Histogram ---
+        self.hist_widget = HistogramWidget()
+        self.add_section("Histogram", self.hist_widget)
+
+        # --- Exposure ---
+        self.exp_card = SimpleCardWidget()
+        exp_layout = QVBoxLayout(self.exp_card)
+        
+        self.auto_exp_radio = SwitchButton(text="Auto Exposure")
+        self.auto_exp_radio.setChecked(True)  # Default to Auto Exposure
+        self.auto_exp_radio.checkedChanged.connect(self._on_exposure_mode_changed)
+        
+        self.metering_lbl = BodyLabel("Metering Mode")
+        self.metering_combo = ComboBox()
+        self.metering_combo.addItems(['Matrix', 'Average', 'Center-Weighted', 'Highlight-Safe', 'Hybrid'])
+        self.metering_combo.setCurrentText('Matrix')
+        self.metering_combo.currentTextChanged.connect(self._on_param_change)
+        
+        self.exp_slider = Slider(Qt.Orientation.Horizontal)
+        self.exp_slider.setRange(-50, 50) # -5.0 to 5.0
+        self.exp_slider.setValue(0)
+        
+        # Add exposure value label
+        self.exp_value_label = BodyLabel("Exposure EV: 0.0")
+        
+        def update_exp_label(val):
+            real_val = val / 10.0
+            self.exp_value_label.setText(f"Exposure EV: {real_val:+.1f}")
+            self._on_param_change()
+        
+        self.exp_slider.valueChanged.connect(update_exp_label)
+        
+        exp_layout.addWidget(self.auto_exp_radio)
+        exp_layout.addWidget(self.metering_lbl)
+        exp_layout.addWidget(self.metering_combo)
+        exp_layout.addWidget(self.exp_value_label)
+        exp_layout.addWidget(self.exp_slider)
+        
+        self._update_exposure_ui_state()
+        
+        self.add_section("Exposure", self.exp_card)
+        
+        # --- Color / Log ---
+        self.color_card = SimpleCardWidget()
+        color_layout = QVBoxLayout(self.color_card)
+        
+        # Log Space
+        color_layout.addWidget(BodyLabel("Log Space"))
+        self.log_combo = ComboBox()
+        log_items = ['None'] + list(config.LOG_TO_WORKING_SPACE.keys())
+        self.log_combo.addItems(log_items)
+        self.log_combo.setCurrentText('None')
+        self.log_combo.currentTextChanged.connect(self._on_param_change)
+        color_layout.addWidget(self.log_combo)
+        
+        # LUT
+        color_layout.addWidget(BodyLabel("LUT"))
+        lut_layout = QHBoxLayout()
+        self.lut_combo = ComboBox()
+        self.lut_combo.addItem("None")
+        self.lut_combo.currentTextChanged.connect(self._on_param_change)
+        
+        self.lut_btn = ToolButton(FIF.FOLDER)
+        self.lut_btn.clicked.connect(self._browse_lut_folder)
+        
+        lut_layout.addWidget(self.lut_combo, 1)
+        lut_layout.addWidget(self.lut_btn)
+        color_layout.addLayout(lut_layout)
+        
+        self.add_section("Color Management", self.color_card)
+        
+        # --- Lens Correction ---
+        self.lens_card = SimpleCardWidget()
+        lens_layout = QVBoxLayout(self.lens_card)
+        
+        self.lens_correct_switch = SwitchButton(text="Enable Lens Correction")
+        self.lens_correct_switch.setChecked(True)  # Default enabled
+        self.lens_correct_switch.checkedChanged.connect(self._on_param_change)
+        lens_layout.addWidget(self.lens_correct_switch)
+        
+        # Custom Lensfun DB
+        lens_layout.addWidget(BodyLabel("Custom Lensfun Database"))
+        db_layout = QHBoxLayout()
+        self.db_path_edit = LineEdit()
+        self.db_path_edit.setPlaceholderText("Optional: Path to custom XML database")
+        self.db_path_edit.setReadOnly(True)
+        self.db_path_edit.textChanged.connect(self._on_param_change)
+        
+        self.db_browse_btn = ToolButton(FIF.FOLDER)
+        self.db_browse_btn.clicked.connect(self._browse_lensfun_db)
+        
+        self.db_clear_btn = ToolButton(FIF.CLOSE)
+        self.db_clear_btn.clicked.connect(self._clear_lensfun_db)
+        
+        db_layout.addWidget(self.db_path_edit, 1)
+        db_layout.addWidget(self.db_browse_btn)
+        db_layout.addWidget(self.db_clear_btn)
+        lens_layout.addLayout(db_layout)
+        
+        self.add_section("Lens Correction", self.lens_card)
+        
+        # --- Adjustments ---
+        self.adj_card = SimpleCardWidget()
+        adj_layout = QVBoxLayout(self.adj_card)
+        
+        self.sliders = {}
+        self.slider_labels = {}  # 存储标签引用以便更新
+        
+        def add_slider(key, name, min_v, max_v, default_v, scale=1.0):
+            layout = QVBoxLayout()
+            lbl = BodyLabel(f"{name}: {default_v}")
+            slider = Slider(Qt.Orientation.Horizontal)
+            slider.setRange(int(min_v*scale), int(max_v*scale))
+            slider.setValue(int(default_v*scale))
+            
+            def update_lbl(val):
+                real_val = val / scale
+                lbl.setText(f"{name}: {real_val:.2f}")
+                self._on_param_change()
+                
+            slider.valueChanged.connect(update_lbl)
+            
+            layout.addWidget(lbl)
+            layout.addWidget(slider)
+            adj_layout.addLayout(layout)
+            self.sliders[key] = (slider, scale, default_v, name)  # 添加 name 到元组
+            self.slider_labels[key] = lbl  # 存储标签引用
+
+        add_slider('wb_temp', 'Temp', -100, 100, 0, 1)
+        add_slider('wb_tint', 'Tint', -100, 100, 0, 1)
+        add_slider('saturation', 'Saturation', 0, 3, 1.25, 100)
+        add_slider('contrast', 'Contrast', 0, 3, 1.1, 100)
+        add_slider('highlight', 'Highlights', -100, 100, 0, 1)
+        add_slider('shadow', 'Shadows', -100, 100, 0, 1)
+        
+        self.reset_btn = PushButton("Reset All")
+        self.reset_btn.clicked.connect(self.reset_params)
+        adj_layout.addWidget(self.reset_btn)
+        
+        self.add_section("Adjustments", self.adj_card)
+        
+        # Filler
+        self.v_layout.addStretch()
+        
+        self.lut_folder = None
+
+    def set_params(self, params):
+        """Update UI controls from params dict"""
+        if not params: return
+        
+        self.blockSignals(True) # Pause signals to avoid triggering processing loops
+        
+        # Exposure
+        if 'exposure_mode' in params:
+            self.auto_exp_radio.setChecked(params['exposure_mode'] == 'Auto')
+        
+        if 'metering_mode' in params:
+            mode_map = {
+                'matrix': 'Matrix', 'average': 'Average',
+                'center-weighted': 'Center-Weighted',
+                'highlight-safe': 'Highlight-Safe', 'hybrid': 'Hybrid'
+            }
+            self.metering_combo.setCurrentText(mode_map.get(params['metering_mode'], 'Matrix'))
+
+        self._update_exposure_ui_state()
+
+        if 'exposure' in params:
+            exp_val = params['exposure']
+            self.exp_slider.setValue(int(exp_val * 10))
+            # Update the exposure value label
+            self.exp_value_label.setText(f"Exposure EV: {exp_val:+.1f}")
+            
+        # Color
+        if 'log_space' in params:
+            self.log_combo.setCurrentText(params['log_space'])
+        
+        # LUT (Path reconstruction logic needed if we only store path)
+        # Assuming lut_path is full path
+        if 'lut_path' in params and params['lut_path']:
+            lut_name = os.path.basename(params['lut_path'])
+            idx = self.lut_combo.findText(lut_name)
+            if idx >= 0:
+                self.lut_combo.setCurrentIndex(idx)
+            else:
+                 # Maybe LUT folder changed? For now set to None or handle gracefully
+                 pass
+        else:
+            self.lut_combo.setCurrentIndex(0)
+        
+        # Lens Correction
+        if 'lens_correct' in params:
+            self.lens_correct_switch.setChecked(params['lens_correct'])
+        
+        if 'custom_db_path' in params and params['custom_db_path']:
+            self.db_path_edit.setText(params['custom_db_path'])
+        else:
+            self.db_path_edit.clear()
+            
+        # Sliders
+        for key, (slider, scale, _, name) in self.sliders.items():
+            if key in params:
+                slider.setValue(int(params[key] * scale))
+                # 更新标签文本
+                if key in self.slider_labels:
+                    real_val = params[key]
+                    self.slider_labels[key].setText(f"{name}: {real_val:.2f}")
+                
+        self.blockSignals(False)
+        # Emit one signal to update view if needed?
+        # Usually calling code handles the logic update, here we just update UI.
+
+    def add_section(self, title, widget):
+        self.v_layout.addWidget(StrongBodyLabel(title))
+        self.v_layout.addWidget(widget)
+
+    def _browse_lut_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select LUT Folder")
+        if folder:
+            self.lut_folder = folder
+            self.refresh_lut_list()
+
+    def refresh_lut_list(self):
+        if not self.lut_folder: return
+        self.lut_combo.clear()
+        self.lut_combo.addItem("None")
+        files = sorted([f for f in os.listdir(self.lut_folder) if f.lower().endswith('.cube')])
+        self.lut_combo.addItems(files)
+    
+    def _browse_lensfun_db(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Lensfun Database XML",
+            "",
+            "XML Files (*.xml);;All Files (*)"
+        )
+        if file_path:
+            self.db_path_edit.setText(file_path)
+            InfoBar.success("Database Loaded", f"Using custom database: {os.path.basename(file_path)}", parent=self)
+    
+    def _clear_lensfun_db(self):
+        self.db_path_edit.clear()
+        InfoBar.info("Database Cleared", "Using default Lensfun database", parent=self)
+
+    def _update_exposure_ui_state(self):
+        is_auto = self.auto_exp_radio.isChecked()
+        self.metering_combo.setEnabled(is_auto)
+        self.metering_lbl.setEnabled(is_auto)
+        self.exp_slider.setEnabled(not is_auto)
+
+    def _on_exposure_mode_changed(self):
+        self._update_exposure_ui_state()
+        self._on_param_change()
+
+    def _on_param_change(self):
+        self.param_changed.emit(self.get_params())
+
+    def reset_params(self):
+        self.auto_exp_radio.setChecked(True)  # Default to Auto Exposure
+        self.metering_combo.setCurrentText('Matrix')
+        self._update_exposure_ui_state()
+        self.exp_slider.setValue(0)
+        self.exp_value_label.setText("Exposure EV: 0.0")
+        self.log_combo.setCurrentText('None')
+        self.lut_combo.setCurrentIndex(0)
+        self.lens_correct_switch.setChecked(True)  # Default enabled
+        self.db_path_edit.clear()
+        
+        for key, (slider, scale, default, name) in self.sliders.items():
+            slider.blockSignals(True) # Prevent spamming updates during reset
+            slider.setValue(int(default * scale))
+            slider.blockSignals(False)
+            
+            # 更新标签文本
+            if key in self.slider_labels:
+                self.slider_labels[key].setText(f"{name}: {default:.2f}")
+        
+        self._on_param_change()
+
+    def get_params(self):
+        p = {
+            'exposure_mode': 'Auto' if self.auto_exp_radio.isChecked() else 'Manual',
+            'metering_mode': self.metering_combo.currentText().lower(),
+            'exposure': self.exp_slider.value() / 10.0, # Scale factor for EV
+            'log_space': self.log_combo.currentText(),
+            'lut_path': os.path.join(self.lut_folder, self.lut_combo.currentText()) if self.lut_folder and self.lut_combo.currentIndex() > 0 else None,
+            'lens_correct': self.lens_correct_switch.isChecked(),
+            'custom_db_path': self.db_path_edit.text() if self.db_path_edit.text() else None
         }
         
-        if self.exposure_mode_var.get() == "Manual":
-            params['exposure'] = self.exposure_stops_var.get()
-            params['metering_mode'] = None
-        else:
-            params['exposure'] = None
-            params['metering_mode'] = self.metering_mode_var.get()
-
-        # 2. 创建多进程通信桥梁
-        manager = multiprocessing.Manager()
-        mp_queue = manager.Queue()
-        
-        # 启动一个“监视线程”，负责把多进程队列的数据搬运到 Tkinter 队列
-        monitor = threading.Thread(target=self.monitor_mp_queue, args=(mp_queue,))
-        monitor.daemon = True
-        monitor.start()
-
-        try:
-            # 3. 调用 Orchestrator (假设 orchestrator 已更新以支持 output_format)
-            # 注意：这里我们传递 mp_queue 进去
-            orchestrator.process_path(
-                **params,
-                logger_func=mp_queue 
-            )
-            self.log_gui("All tasks completed.", "SUCCESS")
+        for key, (slider, scale, _, _) in self.sliders.items():
+            p[key] = slider.value() / scale
             
-        except Exception as e:
-            self.log_gui(f"Critical Error: {e}", "ERROR")
-            import traceback
-            traceback.print_exc()
-        finally:
-            # 恢复按钮 (使用 after 确保在主线程执行)
-            self.master.after(0, lambda: self.start_button.config(state="normal"))
-            # 发送结束信号给监视线程
-            mp_queue.put(None) 
+        return p
 
-    def monitor_mp_queue(self, mp_q):
-        """
-        后台线程：从 Multiprocessing Queue 读取数据，
-        转发给 Tkinter Queue。
-        """
-        processed_count = 0
-        total_files = 0
+
+class MainWindow(FluentWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Raw Alchemy Studio")
+        self.resize(1900, 1200)
         
-        while True:
-            try:
-                item = mp_q.get()
-                if item is None: break # 结束信号
+        # State
+        self.current_folder = None
+        self.current_raw_path = None
+        self.marked_files = set()
+        self.file_params_cache = {} # path -> params dict
+        self.thumbnail_cache = {} # path -> original QPixmap (without green dot)
+        
+        self.create_ui()
+        
+        # Workers
+        self.thumb_worker = None
+        self.processor = ImageProcessor()
+        self.processor.result_ready.connect(self.on_process_result)
+        self.processor.original_ready.connect(self.on_original_ready)
+        self.processor.finished.connect(self.on_processor_finished)
+        self.processor.error_occurred.connect(self.on_error)
+        
+        # Processing Debounce
+        self.update_timer = QTimer()
+        self.update_timer.setSingleShot(True)
+        self.update_timer.setInterval(100) # 100ms debounce
+        self.update_timer.timeout.connect(self.trigger_processing)
 
-                # 处理不同类型的信号
-                if isinstance(item, dict):
-                    # 1. 结构化日志
-                    if 'msg' in item:
-                        level = "ERROR" if "Error" in item['msg'] else "NORMAL"
-                        self.gui_queue.put({
-                            'type': 'log',
-                            'msg': item['msg'],
-                            'id': item.get('id'),
-                            'level': level
-                        })
-                    
-                    # 2. 进度初始化信号 (Orchestrator 需要发这个)
-                    if 'total_files' in item:
-                        total_files = item['total_files']
-                        self.update_progress(0, total_files)
-                        
-                    # 3. 完成信号
-                    if 'status' in item and item['status'] == 'done':
-                        processed_count += 1
-                        self.update_progress(processed_count, total_files)
+    def create_ui(self):
+        # Central Layout
+        self.main_widget = QWidget()
+        self.main_widget.setObjectName("mainWidget")
+        self.h_layout = QHBoxLayout(self.main_widget)
+        self.h_layout.setContentsMargins(0, 0, 0, 0)
+        self.h_layout.setSpacing(0)
+        
+        # 1. Left Panel (Gallery)
+        self.left_panel = QWidget()
+        self.left_panel.setFixedWidth(400)
+        self.left_panel.setStyleSheet("background-color: transparent;")
+        self.left_layout = QVBoxLayout(self.left_panel)
+        self.left_layout.setContentsMargins(5, 10, 5, 10)
+        
+        self.gallery_list = QListWidget()
+        self.gallery_list.setIconSize(QSize(130, 100))
+        self.gallery_list.setGridSize(QSize(160, 140))
+        self.gallery_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.gallery_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.gallery_list.setSpacing(10)
+        self.gallery_list.itemClicked.connect(self.on_gallery_item_clicked)
+        self.gallery_list.setStyleSheet("""
+            QListWidget {
+                background-color: transparent;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item {
+                color: white;
+                border-radius: 8px;
+                padding: 5px;
+            }
+            QListWidget::item:selected {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: white;
+            }
+            QListWidget::item:hover {
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+        """)
+        
+        self.open_btn = PrimaryPushButton(FIF.FOLDER, "Open Folder")
+        self.open_btn.clicked.connect(self.browse_folder)
+        
+        self.left_layout.addWidget(SubtitleLabel("Library"))
+        self.left_layout.addWidget(self.gallery_list)
+        self.left_layout.addWidget(self.open_btn)
+        
+        # 2. Center Panel (Preview)
+        self.center_panel = QWidget()
+        self.center_layout = QVBoxLayout(self.center_panel)
+        self.center_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Preview Area
+        self.preview_lbl = QLabel("No Image Selected")
+        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_lbl.setStyleSheet("background-color: #202020; border-radius: 8px; color: white;")
+        self.preview_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Handle compare (Mouse Press/Release)
+        self.preview_lbl.mousePressEvent = self.show_original
+        self.preview_lbl.mouseReleaseEvent = self.show_processed
+        
+        # Toolbar
+        self.toolbar = QFrame()
+        self.toolbar.setFixedHeight(60)
+        self.toolbar_layout = QHBoxLayout(self.toolbar)
+        
+        self.btn_prev = ToolButton(FIF.LEFT_ARROW)
+        self.btn_next = ToolButton(FIF.RIGHT_ARROW)
+        self.btn_mark = ToolButton(FIF.TAG)
+        self.btn_mark.setCheckable(True)  # Make it a toggle button
+        self.btn_delete = ToolButton(FIF.DELETE)
+        self.btn_compare = PushButton("Hold to Compare") # Visual cue
+        self.btn_compare.setToolTip("Press and hold on the image to see the original")
+        
+        self.btn_export_curr = PushButton("Export Current")
+        self.btn_export_all = PrimaryPushButton("Export All Marked")
+        
+        self.btn_prev.clicked.connect(self.prev_image)
+        self.btn_next.clicked.connect(self.next_image)
+        self.btn_mark.clicked.connect(self.toggle_mark)
+        self.btn_delete.clicked.connect(self.delete_image)
+        self.btn_export_curr.clicked.connect(self.export_current)
+        
+        # Make compare button toggle between original and processed
+        self.btn_compare.pressed.connect(lambda: self.show_original(None))
+        self.btn_compare.released.connect(lambda: self.show_processed(None))
+        
+        self.toolbar_layout.addWidget(self.btn_prev)
+        self.toolbar_layout.addWidget(self.btn_next)
+        self.toolbar_layout.addStretch()
+        self.toolbar_layout.addWidget(self.btn_mark)
+        self.toolbar_layout.addWidget(self.btn_delete)
+        self.toolbar_layout.addStretch()
+        self.toolbar_layout.addWidget(self.btn_compare)
+        self.toolbar_layout.addWidget(self.btn_export_curr)
+        self.toolbar_layout.addWidget(self.btn_export_all)
+        
+        self.center_layout.addWidget(self.preview_lbl)
+        self.center_layout.addWidget(self.toolbar)
 
+        # 3. Right Panel (Inspector)
+        self.right_panel = InspectorPanel()
+        self.right_panel.setFixedWidth(400)
+        self.right_panel.param_changed.connect(self.on_param_changed)
+
+        # Assemble
+        self.h_layout.addWidget(self.left_panel)
+        self.h_layout.addWidget(self.center_panel, 1) # Expand
+        self.h_layout.addWidget(self.right_panel)
+        
+        self.addSubInterface(self.main_widget, FIF.PHOTO, "Editor")
+        
+        # Apply Dark Theme
+        setTheme(Theme.DARK)
+
+    # --- Actions ---
+
+    def browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder:
+            self.current_folder = folder
+            self.gallery_list.clear()
+            self.start_thumbnail_scan(folder)
+
+    def start_thumbnail_scan(self, folder):
+        if self.thumb_worker:
+            self.thumb_worker.stop()
+            self.thumb_worker.wait()
+        
+        self.thumb_worker = ThumbnailWorker(folder)
+        self.thumb_worker.thumbnail_ready.connect(self.add_gallery_item)
+        self.thumb_worker.start()
+
+    def add_gallery_item(self, path, image):
+        name = os.path.basename(path)
+        
+        # Convert QImage to QPixmap in main thread
+        pixmap = QPixmap.fromImage(image)
+        
+        # Store original pixmap in cache
+        self.thumbnail_cache[path] = pixmap
+
+        # Custom Item with icon and text
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, path)
+        item.setIcon(QIcon(pixmap))
+        
+        # Set the text with or without green dot based on marked status
+        is_marked = path in self.marked_files
+        if is_marked:
+            item.setText(f"🟢 {name}")
+        else:
+            item.setText(name)
+        
+        self.gallery_list.addItem(item)
+
+    def on_gallery_item_clicked(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path == self.current_raw_path: return
+
+        # 1. Save current params before switching
+        if self.current_raw_path:
+            self.file_params_cache[self.current_raw_path] = self.right_panel.get_params()
+
+        # 2. Switch path
+        self.current_raw_path = path
+        
+        # 3. Clear old pixmaps to prevent showing wrong image
+        if hasattr(self, 'original_pixmap_scaled'):
+            self.original_pixmap_scaled = None
+        if hasattr(self, 'last_processed_pixmap'):
+            self.last_processed_pixmap = None
+        
+        # 4. Restore params or Reset
+        if path in self.file_params_cache:
+            self.right_panel.set_params(self.file_params_cache[path])
+        else:
+            self.right_panel.reset_params() # This resets UI
+        
+        # 5. Update mark button state
+        self.update_mark_button_state()
+        
+        # 6. Load Image
+        self.load_image(path)
+
+    def load_image(self, path):
+        self.preview_lbl.setText("Loading...")
+        self.processor.load_image(path)
+        
+    def on_processor_finished(self):
+        # Determine if we need to restart processing based on pending tasks
+        
+        # Case 1: We wanted to load, but just finished processing (or something else)
+        if self.processor.mode == 'load' and self.processor.running_mode != 'load':
+            self.processor.start()
+            return
+
+        # Case 2: We finished loading, now we need to trigger initial processing
+        if self.processor.mode == 'load':
+            # Finished loading, start processing
+            QTimer.singleShot(0, self.trigger_processing)
+            return
+            
+        # Case 3: We are in process mode
+        if self.processor.mode == 'process':
+            # If we just finished load, or params are dirty, restart
+            if self.processor.running_mode != 'process' or self.processor.params_dirty:
+                self.processor.params_dirty = False
+                self.processor.start()
+                return
+
+    def on_param_changed(self, params):
+        # Debounce
+        self.update_timer.start()
+        
+    def trigger_processing(self):
+        if not self.current_raw_path: return
+        params = self.right_panel.get_params()
+        self.processor.update_preview(params)
+
+    def on_process_result(self, img_uint8, img_float, image_path):
+        # Verify this result is for the currently selected image
+        if image_path != self.current_raw_path:
+            # Ignore results from previous image selections
+            return
+            
+        h, w, c = img_uint8.shape
+        # Create QImage from numpy array, ensure data is persistent during copy
+        # Using bytes copy to be safe against garbage collection of array view
+        # We store the bytes object in self to guarantee it lives until QPixmap conversion is done
+        self._current_img_data = img_uint8.data.tobytes()
+        qimg = QImage(self._current_img_data, w, h, w * 3, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg)
+        
+        # Scale to fit label
+        scaled = pixmap.scaled(self.preview_lbl.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.preview_lbl.setPixmap(scaled)
+        self.preview_lbl.repaint() # Force update
+        
+        # Store for compare
+        self.last_processed_pixmap = scaled
+        
+        # Update Histogram
+        self.right_panel.hist_widget.update_data(img_float)
+
+    def on_original_ready(self, img_uint8, image_path):
+        # Verify this result is for the currently selected image
+        if image_path != self.current_raw_path:
+            # Ignore results from previous image selections
+            return
+            
+        h, w, c = img_uint8.shape
+        self._current_orig_data = img_uint8.data.tobytes()
+        qimg = QImage(self._current_orig_data, w, h, w * 3, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg)
+        self.original_pixmap_raw = pixmap
+        
+        # Show immediate preview and store scaled version for compare
+        scaled = pixmap.scaled(self.preview_lbl.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.original_pixmap_scaled = scaled  # Store for compare functionality
+        self.preview_lbl.setPixmap(scaled)
+        self.preview_lbl.repaint()
+
+    def on_error(self, msg):
+        self.preview_lbl.setText(f"Error: {msg}")
+        InfoBar.error("Error", msg, parent=self)
+
+    # --- Toolbar Actions ---
+    
+    def prev_image(self):
+        row = self.gallery_list.currentRow()
+        if row > 0:
+            self.gallery_list.setCurrentRow(row - 1)
+            self.on_gallery_item_clicked(self.gallery_list.currentItem())
+
+    def next_image(self):
+        row = self.gallery_list.currentRow()
+        if row < self.gallery_list.count() - 1:
+            self.gallery_list.setCurrentRow(row + 1)
+            self.on_gallery_item_clicked(self.gallery_list.currentItem())
+
+    def toggle_mark(self):
+        if not self.current_raw_path: return
+        
+        if self.current_raw_path in self.marked_files:
+            self.marked_files.remove(self.current_raw_path)
+            InfoBar.info("Unmarked", os.path.basename(self.current_raw_path), parent=self)
+        else:
+            self.marked_files.add(self.current_raw_path)
+            InfoBar.success("Marked", os.path.basename(self.current_raw_path), parent=self)
+        
+        # Update button state and gallery item indicator
+        self.update_mark_button_state()
+        self.update_gallery_item_mark_indicator(self.current_raw_path)
+    
+    def update_mark_button_state(self):
+        """Update the mark button's checked state based on whether current image is marked"""
+        if not self.current_raw_path:
+            self.btn_mark.setChecked(False)
+            return
+        
+        # Block signals to prevent triggering toggle_mark when programmatically setting state
+        self.btn_mark.blockSignals(True)
+        self.btn_mark.setChecked(self.current_raw_path in self.marked_files)
+        self.btn_mark.blockSignals(False)
+
+    def update_gallery_item_mark_indicator(self, path):
+        """Update the green dot indicator on a gallery item"""
+        for i in range(self.gallery_list.count()):
+            item = self.gallery_list.item(i)
+            item_path = item.data(Qt.ItemDataRole.UserRole)
+            if item_path == path:
+                # Update the item's text to show/hide the green dot
+                is_marked = path in self.marked_files
+                name = os.path.basename(path)
+                
+                if is_marked:
+                    item.setText(f"🟢 {name}")
                 else:
-                    # 简单的字符串日志
-                    self.gui_queue.put({'type': 'log', 'msg': str(item)})
-
-            except Exception:
+                    item.setText(name)
                 break
 
-def launch_gui():
-    multiprocessing.freeze_support()
-    root = tk.Tk()
-    
-    # 尝试设置高 DPI 缩放 (Windows)
-    try:
-        from ctypes import windll
-        windll.shcore.SetProcessDpiAwarenessContext(-4)
-    except:
-        pass
+    def delete_image(self):
+        if not self.current_raw_path: return
+        
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Ask for confirmation
+        reply = QMessageBox.question(
+            self,
+            "Delete Image",
+            f"Are you sure you want to delete {os.path.basename(self.current_raw_path)}?\n\nThis will move the file to the recycle bin.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Move to recycle bin using send2trash
+                import send2trash
+                send2trash.send2trash(self.current_raw_path)
+                
+                # Remove from marked files if it was marked
+                if self.current_raw_path in self.marked_files:
+                    self.marked_files.remove(self.current_raw_path)
+                
+                # Remove from params cache
+                if self.current_raw_path in self.file_params_cache:
+                    del self.file_params_cache[self.current_raw_path]
+                
+                # Find and remove from gallery
+                current_row = self.gallery_list.currentRow()
+                for i in range(self.gallery_list.count()):
+                    item = self.gallery_list.item(i)
+                    if item.data(Qt.ItemDataRole.UserRole) == self.current_raw_path:
+                        self.gallery_list.takeItem(i)
+                        break
+                
+                # Move to next image or previous if at end
+                if self.gallery_list.count() > 0:
+                    if current_row >= self.gallery_list.count():
+                        current_row = self.gallery_list.count() - 1
+                    self.gallery_list.setCurrentRow(current_row)
+                    self.on_gallery_item_clicked(self.gallery_list.currentItem())
+                else:
+                    # No more images
+                    self.current_raw_path = None
+                    self.preview_lbl.setText("No Image Selected")
+                
+                InfoBar.success("Deleted", "Image moved to recycle bin", parent=self)
+                
+            except ImportError:
+                # Fallback if send2trash is not installed
+                InfoBar.error("Error", "send2trash module not installed. Cannot delete file safely.", parent=self)
+            except Exception as e:
+                InfoBar.error("Delete Failed", str(e), parent=self)
 
-    app = GuiApplication(master=root)
-    app.mainloop()
+    def show_original(self, event):
+        """Show original image when mouse is pressed or button is held"""
+        if hasattr(self, 'original_pixmap_scaled') and self.original_pixmap_scaled:
+            self.preview_lbl.setPixmap(self.original_pixmap_scaled)
+            InfoBar.info("Compare", "Showing Original (Auto Exposure)", duration=1000, parent=self)
+        else:
+            # Debug: Image not ready yet
+            if self.current_raw_path:
+                InfoBar.warning("Compare", "Original image is still loading, please wait...", duration=1500, parent=self)
+
+    def show_processed(self, event):
+        """Show processed image when mouse is released or button is released"""
+        if hasattr(self, 'last_processed_pixmap') and self.last_processed_pixmap:
+            self.preview_lbl.setPixmap(self.last_processed_pixmap)
+        elif hasattr(self, 'original_pixmap_scaled') and self.original_pixmap_scaled:
+            # Fallback to original if processed not ready yet
+            self.preview_lbl.setPixmap(self.original_pixmap_scaled)
+
+    def export_current(self):
+        if not self.current_raw_path: return
+        
+        # Save Dialog with HEIF support
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Image",
+            os.path.basename(self.current_raw_path),
+            "JPEG (*.jpg);;HEIF (*.heif);;TIFF (*.tif)"
+        )
+        if path:
+            self.run_export(
+                input_path=self.current_raw_path,
+                output_path=path
+            )
+
+    def export_all(self):
+        if not self.marked_files:
+             InfoBar.warning("No Files Marked", "Please mark files using the tag button first.", parent=self)
+             return
+             
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
+        if folder:
+             # Batch export marked files
+             # We create a temporary list to process
+             # Note: Orchestrator currently supports single file or full folder.
+             # We need to adapt it or loop here. Looping here with thread is safer for GUI.
+             
+             self.batch_export_list = list(self.marked_files)
+             self.batch_export_folder = folder
+             self.batch_export_idx = 0
+             self.batch_export_next()
+
+    def batch_export_next(self):
+         if self.batch_export_idx >= len(self.batch_export_list):
+             InfoBar.success("Batch Export", "All marked files exported successfully.", parent=self)
+             return
+
+         input_path = self.batch_export_list[self.batch_export_idx]
+         filename = os.path.basename(input_path)
+         # Default to jpg for batch for now, or allow user selection? User req said 'export marked', assume same settings
+         # Let's assume JPEG for simple batch
+         output_path = os.path.join(self.batch_export_folder, os.path.splitext(filename)[0] + ".jpg")
+         
+         self.batch_export_idx += 1
+         
+         # Trigger single export but chain the next one
+         # We'll use a modified run_export that accepts a callback
+         self.run_export(input_path, output_path, callback=self.batch_export_next)
+
+
+    def run_export(self, input_path, output_path, callback=None):
+        # Gather params
+        p = self.right_panel.get_params()
+        
+        # Determine format from extension
+        ext = os.path.splitext(output_path)[1].lower().replace('.', '')
+        if ext not in ['jpg', 'heif', 'tif', 'tiff']: ext = 'jpg'
+        
+        # Create a thread to run orchestrator (it blocks otherwise)
+        # Using a simple QThread wrapper
+        
+        class ExportThread(QThread):
+            finished_sig = pyqtSignal(bool, str)
+            
+            def run(self):
+                try:
+                    orchestrator.process_path(
+                        input_path=input_path,
+                        output_path=output_path,
+                        log_space=p['log_space'],
+                        lut_path=p['lut_path'],
+                        exposure=p['exposure'] if p['exposure_mode'] == 'Manual' else None,
+                        lens_correct=p['lens_correct'],
+                        custom_db_path=p['custom_db_path'],
+                        metering_mode=p.get('metering_mode', 'matrix'),
+                        jobs=1,
+                        logger_func=lambda msg: None, # Mute log for now
+                        output_format=ext,
+                        wb_temp=p['wb_temp'],
+                        wb_tint=p['wb_tint'],
+                        saturation=p['saturation'],
+                        contrast=p['contrast'],
+                        highlight=p['highlight'],
+                        shadow=p['shadow']
+                    )
+                    self.finished_sig.emit(True, "")
+                except Exception as e:
+                    self.finished_sig.emit(False, str(e))
+        
+        self.export_thread = ExportThread()
+        
+        def on_finish(success, msg):
+            if success:
+                if not callback:
+                    InfoBar.success("Export Success", f"Saved to {os.path.basename(output_path)}", parent=self)
+                if callback: callback()
+            else:
+                InfoBar.error("Export Failed", msg, parent=self)
+        
+        self.export_thread.finished_sig.connect(on_finish)
+        self.export_thread.start()
+
+
+def launch_gui():
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     launch_gui()

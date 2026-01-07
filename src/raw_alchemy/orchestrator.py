@@ -17,8 +17,15 @@ def process_path(
     custom_db_path,
     metering_mode,
     jobs,
-    logger_func, # A function to handle logging, e.g., print or queue.put
+    logger_func,
     output_format: str = 'tif',
+    # New Params
+    wb_temp: float = 0.0,
+    wb_tint: float = 0.0,
+    saturation: float = 1.25,
+    contrast: float = 1.1,
+    highlight: float = 0.0,
+    shadow: float = 0.0,
 ):
     """
     Orchestrates the processing of a single file or a directory of files.
@@ -76,8 +83,13 @@ def process_path(
                     lens_correct=lens_correct,
                     custom_db_path=custom_db_path,
                     metering_mode=metering_mode,
-                    # Pass queue directly if it is one (for internal logging inside the worker)
-                    log_queue=logger_func if hasattr(logger_func, 'put') else None 
+                    log_queue=logger_func if hasattr(logger_func, 'put') else None,
+                    wb_temp=wb_temp,
+                    wb_tint=wb_tint,
+                    saturation=saturation,
+                    contrast=contrast,
+                    highlight=highlight,
+                    shadow=shadow,
                 ): filename for filename in raw_files
             }
             
@@ -121,7 +133,13 @@ def process_path(
                 lens_correct=lens_correct,
                 custom_db_path=custom_db_path,
                 metering_mode=metering_mode,
-                log_queue=logger_func if hasattr(logger_func, 'put') else None
+                log_queue=logger_func if hasattr(logger_func, 'put') else None,
+                wb_temp=wb_temp,
+                wb_tint=wb_tint,
+                saturation=saturation,
+                contrast=contrast,
+                highlight=highlight,
+                shadow=shadow,
             )
         finally:
             # 发送完成信号

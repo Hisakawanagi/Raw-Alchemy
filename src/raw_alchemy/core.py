@@ -22,11 +22,18 @@ def process_image(
     output_path: str,
     log_space: str,
     lut_path: Optional[str],
-    exposure: Optional[float] = None, # None=自动, Float=手动EV
+    exposure: Optional[float] = None,
     lens_correct: bool = True,
     metering_mode: str = 'hybrid',
     custom_db_path: Optional[str] = None,
-    log_queue: Optional[object] = None, # 多进程通信队列
+    log_queue: Optional[object] = None,
+    # New params
+    wb_temp: float = 0.0,
+    wb_tint: float = 0.0,
+    saturation: float = 1.25,
+    contrast: float = 1.1,
+    highlight: float = 0.0,
+    shadow: float = 0.0,
 ):
     filename = os.path.basename(raw_path)
     
@@ -72,21 +79,31 @@ def process_image(
         logger.info(f"  🔹 [Step 2] Auto Exposure ({metering_mode})")
         img = apply_auto_exposure(img, source_cs, metering_mode, target_gray=0.18, logger=logger)
 
-    # --- Step 3: 镜头校正 & 风格化 ---
+    # --- Step 3: 基础校正 (WB, Lens, HL/SH) ---
+    
+    # 3.1 镜头校正
     if lens_correct:
-        logger.info("  🔹 [Step 3] Applying Lens Correction...")
+        logger.info("  🔹 [Step 3.1] Lens Correction...")
         img = utils.apply_lens_correction(
             img,
             exif_data=exif_data,
             custom_db_path=custom_db_path,
             logger=logger.log
         )
-    else:
-        logger.info("  🔹 [Step 3] Skipping Lens Correction.")
+    
+    # 3.2 白平衡
+    if wb_temp != 0.0 or wb_tint != 0.0:
+        logger.info(f"  🔹 [Step 3.2] White Balance (T:{wb_temp}, t:{wb_tint})...")
+        utils.apply_white_balance(img, wb_temp, wb_tint)
 
-    # 稍微增加饱和度和对比度，为 LUT 转换打底
-    logger.info("  🔹 [Step 3.5] Applying Camera-Match Boost...")
-    img = utils.apply_saturation_and_contrast(img, saturation=1.25, contrast=1.1, colourspace=source_cs)
+    # 3.3 高光/阴影
+    if highlight != 0.0 or shadow != 0.0:
+        logger.info(f"  🔹 [Step 3.3] Highlight/Shadow (H:{highlight}, S:{shadow})...")
+        utils.apply_highlight_shadow(img, highlight, shadow, colourspace=source_cs)
+
+    # 3.4 饱和度/对比度
+    logger.info(f"  🔹 [Step 3.4] Saturation/Contrast (S:{saturation:.2f}, C:{contrast:.2f})...")
+    img = utils.apply_saturation_and_contrast(img, saturation=saturation, contrast=contrast, colourspace=source_cs)
 
     # --- Step 4: 色彩空间转换 (ProPhoto Linear -> Log) ---
     log_color_space_name = LOG_TO_WORKING_SPACE.get(log_space)
