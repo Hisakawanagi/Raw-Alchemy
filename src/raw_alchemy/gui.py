@@ -10,22 +10,22 @@ import gc
 from typing import Optional, Dict
 
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
-    QFileDialog, QListWidget, QListWidgetItem, QFrame, 
+    QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
+    QFileDialog, QListWidget, QListWidgetItem, QFrame,
     QSplitter, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout
 )
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QObject, QTimer, QEvent
 from PyQt6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QResizeEvent, QTransform
 
 from qfluentwidgets import (
-    FluentWindow, SubtitleLabel, PrimaryPushButton, PushButton, 
-    ComboBox, Slider, CaptionLabel, SwitchButton, StrongBodyLabel, 
-    BodyLabel, LineEdit, ToolButton, FluentIcon as FIF, 
-    CardWidget, SimpleCardWidget, ScrollArea, IndeterminateProgressRing, 
+    FluentWindow, SubtitleLabel, PrimaryPushButton, PushButton,
+    ComboBox, Slider, CaptionLabel, SwitchButton, StrongBodyLabel,
+    BodyLabel, LineEdit, ToolButton, FluentIcon as FIF,
+    CardWidget, SimpleCardWidget, ScrollArea, IndeterminateProgressRing,
     InfoBar, InfoBarPosition, Theme, setTheme, CheckBox
 )
 
-from raw_alchemy import config, utils, orchestrator, metering
+from raw_alchemy import config, utils, orchestrator, metering, lensfun_wrapper
 from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
 
 # ==============================================================================
@@ -345,7 +345,7 @@ class HistogramWidget(QWidget):
              # img_array is float 0-1
              # 使用 utils 中的快速直方图计算函数
              self.hist_data = utils.compute_histogram_fast(img_array, bins=100, sample_rate=4)
-             self.update()
+             self.repaint()  # 使用 repaint() 强制立即重绘，而不是 update()
         except Exception as e:
              print(f"Histogram update error: {e}")
              import traceback
@@ -680,11 +680,22 @@ class InspectorPanel(ScrollArea):
         )
         if file_path:
             self.db_path_edit.setText(file_path)
-            InfoBar.success("Database Loaded", f"Using custom database: {os.path.basename(file_path)}", parent=self)
+            # 重新加载lensfun数据库
+            try:
+                lensfun_wrapper.reload_lensfun_database(custom_db_path=file_path, logger=print)
+                InfoBar.success("Database Loaded", f"Using custom database: {os.path.basename(file_path)}", parent=self)
+            except Exception as e:
+                InfoBar.error("Database Load Failed", f"Failed to load database: {str(e)}", parent=self)
+                self.db_path_edit.clear()
     
     def _clear_lensfun_db(self):
         self.db_path_edit.clear()
-        InfoBar.info("Database Cleared", "Using default Lensfun database", parent=self)
+        # 重新加载默认lensfun数据库
+        try:
+            lensfun_wrapper.reload_lensfun_database(custom_db_path=None, logger=print)
+            InfoBar.info("Database Cleared", "Using default Lensfun database", parent=self)
+        except Exception as e:
+            InfoBar.warning("Database Reload", f"Warning: {str(e)}", parent=self)
 
     def _update_exposure_ui_state(self):
         is_auto = self.auto_exp_radio.isChecked()
@@ -710,14 +721,10 @@ class InspectorPanel(ScrollArea):
         self.lens_correct_switch.setChecked(True)  # Default enabled
         self.db_path_edit.clear()
         
+        # 重置所有滑块,不阻塞信号以确保UI正确更新
         for key, (slider, scale, default, name) in self.sliders.items():
-            slider.blockSignals(True) # Prevent spamming updates during reset
             slider.setValue(int(default * scale))
-            slider.blockSignals(False)
-            
-            # 更新标签文本
-            if key in self.slider_labels:
-                self.slider_labels[key].setText(f"{name}: {default:.2f}")
+            # 标签会通过valueChanged信号自动更新,无需手动设置
         
         self._on_param_change()
 
@@ -751,6 +758,9 @@ class MainWindow(FluentWindow):
         self.file_params_cache = {} # path -> params dict
         self.thumbnail_cache = {} # path -> original QPixmap (without green dot)
         
+        # 预加载lensfun数据库（在后台线程中）
+        self._preload_lensfun_database()
+        
         self.create_ui()
         
         # Workers
@@ -766,6 +776,20 @@ class MainWindow(FluentWindow):
         self.update_timer.setSingleShot(True)
         self.update_timer.setInterval(100) # 100ms debounce
         self.update_timer.timeout.connect(self.trigger_processing)
+    
+    def _preload_lensfun_database(self):
+        """在后台线程中预加载lensfun数据库，避免阻塞GUI启动"""
+        def preload():
+            try:
+                # 预加载默认数据库
+                lensfun_wrapper._get_or_create_database(custom_db_path=None, logger=lambda msg: None)
+            except Exception as e:
+                print(f"  ⚠️ [Lensfun] Failed to preload database: {e}")
+        
+        # 在后台线程中执行，不阻塞GUI
+        import threading
+        preload_thread = threading.Thread(target=preload, daemon=True)
+        preload_thread.start()
 
     def create_ui(self):
         # Central Layout

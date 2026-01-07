@@ -308,7 +308,7 @@ class LensfunDatabase:
                 raise RuntimeError(f"Could not read custom database file: {custom_db_path}. Error: {e}")
     
     def __del__(self):
-        if hasattr(self, 'db') and self.db:
+        if hasattr(self, 'db') and self.db and _lensfun is not None:
             _lensfun.lf_db_destroy(self.db)
     
     def find_camera(self, maker: Optional[str], model: str) -> Optional[ctypes.POINTER(lfCamera)]:
@@ -351,7 +351,7 @@ class LensfunModifier:
         self.height = height
     
     def __del__(self):
-        if hasattr(self, 'modifier') and self.modifier:
+        if hasattr(self, 'modifier') and self.modifier and _lensfun is not None:
             _lensfun.lf_modifier_destroy(self.modifier)
     
     def enable_distortion_correction(self) -> int:
@@ -425,6 +425,85 @@ class LensfunModifier:
 
 
 # ============================================================================
+# 全局数据库缓存
+# ============================================================================
+
+# 全局数据库缓存，避免每次都重新加载
+_global_db_cache = {}
+_global_db_lock = None
+
+def _get_or_create_database(custom_db_path: Optional[str] = None, logger: callable = print):
+    """
+    获取或创建Lensfun数据库（带缓存）
+    
+    参数:
+        custom_db_path: 自定义数据库路径，None表示使用默认数据库
+        logger: 日志函数
+    
+    返回:
+        LensfunDatabase对象
+    """
+    global _global_db_cache, _global_db_lock
+    
+    # 初始化锁（线程安全）
+    if _global_db_lock is None:
+        import threading
+        _global_db_lock = threading.Lock()
+    
+    # 使用custom_db_path作为缓存键
+    cache_key = custom_db_path if custom_db_path else '__default__'
+    
+    with _global_db_lock:
+        # 检查缓存
+        if cache_key in _global_db_cache:
+            return _global_db_cache[cache_key]
+        
+        # 创建新数据库并缓存
+        try:
+            db = LensfunDatabase(custom_db_path=custom_db_path, logger=logger)
+            _global_db_cache[cache_key] = db
+            return db
+        except Exception as e:
+            logger(f"  ❌ [Lensfun] Failed to create database: {e}")
+            raise
+
+def reload_lensfun_database(custom_db_path: Optional[str] = None, logger: callable = print):
+    """
+    强制重新加载Lensfun数据库（用于更新custom db时）
+    
+    参数:
+        custom_db_path: 自定义数据库路径，None表示重新加载默认数据库
+        logger: 日志函数
+    """
+    global _global_db_cache, _global_db_lock
+    
+    if _global_db_lock is None:
+        import threading
+        _global_db_lock = threading.Lock()
+    
+    cache_key = custom_db_path if custom_db_path else '__default__'
+    
+    with _global_db_lock:
+        # 删除旧缓存
+        if cache_key in _global_db_cache:
+            old_db = _global_db_cache[cache_key]
+            del _global_db_cache[cache_key]
+            # 显式销毁旧数据库
+            if hasattr(old_db, 'db') and old_db.db:
+                _lensfun.lf_db_destroy(old_db.db)
+                old_db.db = None
+        
+        # 创建新数据库
+        try:
+            db = LensfunDatabase(custom_db_path=custom_db_path, logger=logger)
+            _global_db_cache[cache_key] = db
+            logger(f"  ✅ [Lensfun] Database reloaded successfully")
+            return db
+        except Exception as e:
+            logger(f"  ❌ [Lensfun] Failed to reload database: {e}")
+            raise
+
+# ============================================================================
 # 便捷函数
 # ============================================================================
 
@@ -459,6 +538,8 @@ def apply_lens_correction(
         correct_tca: 是否校正横向色差
         correct_vignetting: 是否校正暗角
         distance: 对焦距离 (米)
+        custom_db_path: 自定义数据库路径
+        logger: 日志函数
     
     返回:
         校正后的图像（与输入相同dtype）
@@ -476,8 +557,8 @@ def apply_lens_correction(
     
     height, width = image.shape[:2]
     
-    # 创建数据库并查找相机和镜头
-    db = LensfunDatabase(custom_db_path=custom_db_path, logger=logger)
+    # 使用缓存的数据库（避免每次都重新加载）
+    db = _get_or_create_database(custom_db_path=custom_db_path, logger=logger)
     camera = db.find_camera(camera_maker, camera_model)
     lens = db.find_lens(camera, lens_maker, lens_model)
     
