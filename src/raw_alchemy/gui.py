@@ -502,7 +502,7 @@ class InspectorPanel(ScrollArea):
         self.metering_combo.currentTextChanged.connect(self._on_param_change)
         
         self.exp_slider = Slider(Qt.Orientation.Horizontal)
-        self.exp_slider.setRange(-50, 50) # -5.0 to 5.0
+        self.exp_slider.setRange(-100, 100) # -10.0 to 10.0
         self.exp_slider.setValue(0)
         
         # Add exposure value label
@@ -1504,10 +1504,13 @@ class MainWindow(FluentWindow):
         if not self.current_raw_path: return
         
         # Save Dialog with HEIF support
+        # Remove the RAW extension from the default filename to avoid "123.RW2.jpg"
+        base_name_without_ext = os.path.splitext(os.path.basename(self.current_raw_path))[0]
+        
         path, _ = QFileDialog.getSaveFileName(
             self,
             tr('export_image'),
-            os.path.basename(self.current_raw_path),
+            base_name_without_ext,  # Use filename without extension, Qt will add the selected format extension
             "JPEG (*.jpg);;HEIF (*.heif);;TIFF (*.tif)"
         )
         if path:
