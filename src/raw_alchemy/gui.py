@@ -8,6 +8,8 @@ import rawpy
 import colour
 import gc
 from typing import Optional, Dict
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -35,44 +37,30 @@ from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
 # ==============================================================================
 
 class ThumbnailWorker(QThread):
-    """Scan folder and generate thumbnails"""
+    """Scan folder and generate thumbnails - 优化版本使用线程池"""
     thumbnail_ready = pyqtSignal(str, QImage)
     finished_scanning = pyqtSignal()
 
-    def __init__(self, folder_path):
+    def __init__(self, folder_path, max_workers=4):
         super().__init__()
         self.folder_path = folder_path
         self.stopped = False
+        self.max_workers = max_workers
 
-    def run(self):
-        if not os.path.exists(self.folder_path):
-            return
-
-        files = sorted([f for f in os.listdir(self.folder_path) 
-                        if os.path.splitext(f)[1].lower() in SUPPORTED_RAW_EXTENSIONS])
-        
-        for f in files:
-            if self.stopped: break
-            full_path = os.path.join(self.folder_path, f)
-            try:
-                # Attempt to use rawpy to extract thumbnail
-                with rawpy.imread(full_path) as raw:
-                    try:
-                        thumb = raw.extract_thumb()
-                    except rawpy.LibRawNoThumbnailError:
-                        thumb = None
+    @staticmethod
+    def extract_thumbnail(full_path):
+        """静态方法用于线程池并行处理"""
+        try:
+            with rawpy.imread(full_path) as raw:
+                try:
+                    thumb = raw.extract_thumb()
+                except rawpy.LibRawNoThumbnailError:
+                    return None, None
+                
+                if thumb and thumb.format == rawpy.ThumbFormat.JPEG:
+                    image = QImage()
+                    image.loadFromData(thumb.data)
                     
-                    if thumb:
-                        if thumb.format == rawpy.ThumbFormat.JPEG:
-                            image = QImage()
-                            image.loadFromData(thumb.data)
-                        elif thumb.format == rawpy.ThumbFormat.BITMAP:
-                             # Handle bitmap if necessary, or skip
-                             continue
-                    else:
-                        # Fallback or skip
-                        continue
-
                     if not image.isNull():
                         # Handle rotation based on flip value
                         orientation = raw.sizes.flip
@@ -82,13 +70,32 @@ class ThumbnailWorker(QThread):
                             image = image.transformed(QTransform().rotate(-90))
                         elif orientation == 6:
                             image = image.transformed(QTransform().rotate(90))
+                        
+                        # 使用FastTransformation提速 - 缩略图不需要高质量
+                        scaled = image.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                                            Qt.TransformationMode.FastTransformation)
+                        return full_path, scaled
+        except Exception as e:
+            print(f"Error generating thumb for {os.path.basename(full_path)}: {e}")
+        
+        return None, None
 
-                        # Scale down
-                        scaled = image.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                        self.thumbnail_ready.emit(full_path, scaled)
-            except Exception as e:
-                print(f"Error generating thumb for {f}: {e}")
-                continue
+    def run(self):
+        if not os.path.exists(self.folder_path):
+            return
+
+        files = sorted([f for f in os.listdir(self.folder_path)
+                        if os.path.splitext(f)[1].lower() in SUPPORTED_RAW_EXTENSIONS])
+        
+        full_paths = [os.path.join(self.folder_path, f) for f in files]
+        
+        # 使用线程池并行处理缩略图提取
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            for full_path, scaled_image in executor.map(self.extract_thumbnail, full_paths):
+                if self.stopped:
+                    break
+                if full_path and scaled_image:
+                    self.thumbnail_ready.emit(full_path, scaled_image)
         
         self.finished_scanning.emit()
 
@@ -169,15 +176,18 @@ class ImageProcessor(QThread):
                 demosaic_algorithm=rawpy.DemosaicAlgorithm.AAHD,
                 half_size=True
             )
-            img = raw_post.astype(np.float32) / 65535.0
+            # 直接使用float32避免额外转换
+            img = (raw_post / 65535.0).astype(np.float32)
             
-            # Downscale if still too big for 1080p preview (optional optimization)
+            # 优化: 使用更快的下采样方法
             h, w = img.shape[:2]
             max_dim = 2048
             if max(h, w) > max_dim:
-                from scipy.ndimage import zoom
+                # 使用简单的切片下采样,比zoom快得多
                 scale = max_dim / max(h, w)
-                img = zoom(img, (scale, scale, 1), order=1)
+                step = int(1.0 / scale)
+                if step > 1:
+                    img = img[::step, ::step, :]
                 
             self.cached_linear = img
             self.cached_corrected = None
@@ -337,21 +347,35 @@ class HistogramWidget(QWidget):
         self.setFixedHeight(150)
         self.hist_data = None
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        
+        # 优化: 添加更新定时器防抖
+        self.update_timer = QTimer()
+        self.update_timer.setSingleShot(True)
+        self.update_timer.setInterval(50)  # 50ms防抖
+        self.update_timer.timeout.connect(self._do_update)
+        self.pending_data = None
 
     def update_data(self, img_array):
-        # 使用 numba 加速的直方图计算
+        """异步更新直方图数据 - 使用防抖避免频繁计算"""
         if img_array is None:
             return
         
+        # 存储待处理数据并启动定时器
+        self.pending_data = img_array
+        self.update_timer.start()
+    
+    def _do_update(self):
+        """实际执行直方图计算"""
+        if self.pending_data is None:
+            return
+            
         try:
-             # img_array is float 0-1
-             # 使用 utils 中的快速直方图计算函数
-             self.hist_data = utils.compute_histogram_fast(img_array, bins=100, sample_rate=4)
-             self.repaint()  # 使用 repaint() 强制立即重绘，而不是 update()
+             # 使用更激进的采样率提升性能 (8x vs 4x)
+             self.hist_data = utils.compute_histogram_fast(self.pending_data, bins=100, sample_rate=8)
+             self.update()  # 使用update()而非repaint(),让Qt优化重绘
+             self.pending_data = None
         except Exception as e:
              print(f"Histogram update error: {e}")
-             import traceback
-             traceback.print_exc()
 
     def paintEvent(self, event):
         if not self.hist_data:
@@ -443,6 +467,9 @@ class InspectorPanel(ScrollArea):
         self.v_layout = QVBoxLayout(self.view)
         self.v_layout.setSpacing(20)
         self.v_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # 保存的基准参数
+        self.saved_baseline_params = None
         
         # --- Histogram ---
         self.hist_widget = HistogramWidget()
@@ -593,9 +620,15 @@ class InspectorPanel(ScrollArea):
         add_slider('highlight', tr('highlights'), -100, 100, 0, 1)
         add_slider('shadow', tr('shadows'), -100, 100, 0, 1)
         
+        # 按钮布局：保存参数和Reset ALL并排
+        btn_layout = QHBoxLayout()
+        self.save_baseline_btn = PushButton(tr('save_baseline'))
+        self.save_baseline_btn.clicked.connect(self.save_baseline_params)
         self.reset_btn = PushButton(tr('reset_all'))
         self.reset_btn.clicked.connect(self.reset_adjustments)
-        adj_layout.addWidget(self.reset_btn)
+        btn_layout.addWidget(self.save_baseline_btn)
+        btn_layout.addWidget(self.reset_btn)
+        adj_layout.addLayout(btn_layout)
         
         self.add_section(tr('adjustments'), self.adj_card)
         
@@ -730,10 +763,22 @@ class InspectorPanel(ScrollArea):
     def _on_param_change(self):
         self.param_changed.emit(self.get_params())
 
+    def save_baseline_params(self):
+        """保存当前参数作为基准点"""
+        self.saved_baseline_params = self.get_params().copy()
+        InfoBar.success(tr('baseline_saved'), tr('baseline_saved_message'), parent=self)
+
     def reset_adjustments(self):
-        for key, (slider, scale, default, name) in self.sliders.items():
-            slider.setValue(int(default * scale))
-        self._on_param_change()
+        """重置到保存的基准点，如果没有保存则重置到默认值"""
+        if self.saved_baseline_params:
+            # 重置到保存的基准点
+            self.set_params(self.saved_baseline_params)
+            self._on_param_change()
+        else:
+            # 重置到默认值
+            for key, (slider, scale, default, name) in self.sliders.items():
+                slider.setValue(int(default * scale))
+            self._on_param_change()
 
     def reset_params(self):
         self.auto_exp_radio.setChecked(True)  # Default to Auto Exposure
@@ -788,6 +833,13 @@ class MainWindow(FluentWindow):
         self.file_params_cache = {} # path -> params dict
         self.thumbnail_cache = {} # path -> original QPixmap (without green dot)
         
+        # 基准点参数缓存 - 每张图像都有自己的基准点参数
+        self.file_baseline_params_cache = {}  # path -> baseline params dict
+        
+        # 优化: 添加缩放图像缓存,避免重复缩放
+        self._scaled_pixmap_cache = {}  # (pixmap_id, size) -> scaled_pixmap
+        self._max_cache_size = 10  # 最多缓存10个缩放图像
+        
         # 预加载lensfun数据库（在后台线程中）
         self._preload_lensfun_database()
         
@@ -801,6 +853,13 @@ class MainWindow(FluentWindow):
         self.processor.original_ready.connect(self.on_original_ready)
         self.processor.finished.connect(self.on_processor_finished)
         self.processor.error_occurred.connect(self.on_error)
+        
+        # 基准点图像处理器 - 用于生成基准点对比图像
+        self.baseline_processor = ImageProcessor()
+        self.baseline_processor.result_ready.connect(self.on_baseline_result)
+        
+        # 当前基准点图像缓存（临时，用于对比显示）
+        self.current_baseline_pixmap = None
         
         # Processing Debounce
         self.update_timer = QTimer()
@@ -952,6 +1011,9 @@ class MainWindow(FluentWindow):
         self.right_panel = InspectorPanel()
         self.right_panel.setFixedWidth(400)
         self.right_panel.param_changed.connect(self.on_param_changed)
+        
+        # 连接保存基准点按钮到保存基准点图像的方法
+        self.right_panel.save_baseline_btn.clicked.connect(self.save_baseline_image)
 
         # Assemble
         self.h_layout.addWidget(self.left_panel)
@@ -1100,11 +1162,19 @@ class MainWindow(FluentWindow):
         # 2. Switch path
         self.current_raw_path = path
         
-        # 3. Clear old pixmaps to prevent showing wrong image
+        # 3. 优化: 清理旧图像并触发垃圾回收
         if hasattr(self, 'original_pixmap_scaled'):
             self.original_pixmap_scaled = None
         if hasattr(self, 'last_processed_pixmap'):
             self.last_processed_pixmap = None
+        if hasattr(self, '_last_processed_pixmap_full'):
+            self._last_processed_pixmap_full = None
+        if hasattr(self, 'original_pixmap_raw'):
+            self.original_pixmap_raw = None
+        # 清除当前基准点图像缓存
+        self.current_baseline_pixmap = None
+        # 清理缩放缓存
+        self._scaled_pixmap_cache.clear()
         
         # 4. Restore params or Reset
         if path in self.file_params_cache:
@@ -1121,6 +1191,11 @@ class MainWindow(FluentWindow):
         
         # 6. Load Image
         self.load_image(path)
+        
+        # 7. 如果这张图像有保存的基准点参数，加载后重新生成基准点图像
+        if path in self.file_baseline_params_cache:
+            # 延迟生成，等待图像加载完成
+            QTimer.singleShot(500, self.regenerate_baseline_for_current_image)
 
     def load_image(self, path):
         self.preview_lbl.setText(tr('loading'))
@@ -1151,6 +1226,60 @@ class MainWindow(FluentWindow):
     def on_param_changed(self, params):
         # Debounce
         self.update_timer.start()
+    
+    def save_baseline_image(self):
+        """保存当前参数作为基准点"""
+        if not self.current_raw_path:
+            return
+            
+        # 保存当前参数到基准点缓存
+        current_params = self.right_panel.get_params()
+        self.file_baseline_params_cache[self.current_raw_path] = current_params.copy()
+        
+        # 立即生成基准点图像用于对比
+        if self.processor.cached_linear is not None:
+            self.baseline_processor.cached_linear = self.processor.cached_linear
+            self.baseline_processor.cached_corrected = self.processor.cached_corrected
+            self.baseline_processor.cached_lens_key = self.processor.cached_lens_key
+            self.baseline_processor.exif_data = self.processor.exif_data
+            self.baseline_processor.processing_path = self.current_raw_path
+            self.baseline_processor.update_preview(current_params)
+    
+    def on_baseline_result(self, img_uint8, img_float, image_path):
+        """处理基准点图像生成结果"""
+        # 只在图像路径匹配时更新
+        if image_path != self.current_raw_path:
+            return
+            
+        h, w, c = img_uint8.shape
+        bytes_per_line = w * 3
+        qimg = QImage(img_uint8.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg.copy())
+        
+        # 优化: 使用缓存的缩放
+        scaled = self._get_scaled_pixmap(pixmap, self.preview_lbl.size())
+        self.current_baseline_pixmap = scaled
+    
+    def regenerate_baseline_for_current_image(self):
+        """为当前图像重新生成基准点图像"""
+        if not self.current_raw_path:
+            return
+        
+        if self.current_raw_path not in self.file_baseline_params_cache:
+            return
+            
+        # 确保主处理器已经加载了图像
+        if self.processor.cached_linear is None:
+            return
+        
+        # 使用保存的基准点参数生成图像
+        baseline_params = self.file_baseline_params_cache[self.current_raw_path]
+        self.baseline_processor.cached_linear = self.processor.cached_linear
+        self.baseline_processor.cached_corrected = self.processor.cached_corrected
+        self.baseline_processor.cached_lens_key = self.processor.cached_lens_key
+        self.baseline_processor.exif_data = self.processor.exif_data
+        self.baseline_processor.processing_path = self.current_raw_path
+        self.baseline_processor.update_preview(baseline_params)
         
     def trigger_processing(self):
         if not self.current_raw_path: return
@@ -1164,33 +1293,36 @@ class MainWindow(FluentWindow):
             return
             
         h, w, c = img_uint8.shape
-        # Create QImage from numpy array, ensure data is persistent during copy
-        # Using bytes copy to be safe against garbage collection of array view
-        # We store the bytes object in self to guarantee it lives until QPixmap conversion is done
-        self._current_img_data = img_uint8.data.tobytes()
-        qimg = QImage(self._current_img_data, w, h, w * 3, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg)
+        # 优化: 使用QImage的构造函数直接从numpy数组创建,避免tobytes()拷贝
+        # 注意: 需要确保img_uint8在QImage生命周期内有效
+        bytes_per_line = w * 3
+        qimg = QImage(img_uint8.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        # 立即转换为QPixmap并拷贝数据,之后img_uint8可以被释放
+        pixmap = QPixmap.fromImage(qimg.copy())
         
-        # Scale to fit label
-        scaled = pixmap.scaled(self.preview_lbl.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        # 优化: 使用缓存的缩放图像
+        scaled = self._get_scaled_pixmap(pixmap, self.preview_lbl.size())
         self.preview_lbl.setPixmap(scaled)
-        self.preview_lbl.repaint() # Force update
+        # 使用update()而非repaint(),让Qt优化重绘时机
+        self.preview_lbl.update()
         
         # Store for compare
         self.last_processed_pixmap = scaled
+        self._last_processed_pixmap_full = pixmap  # 保存完整尺寸用于重新缩放
         
-        # Update Thumbnail in Gallery
-        # Find the item corresponding to image_path
+        # 优化: 更新缩略图 - 使用FastTransformation提速
         current_item = self.gallery_list.currentItem()
         if current_item and current_item.data(Qt.ItemDataRole.UserRole) == image_path:
-            thumb_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            thumb_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                                        Qt.TransformationMode.FastTransformation)
             current_item.setIcon(QIcon(thumb_pixmap))
         else:
             # Fallback: search for item
             for i in range(self.gallery_list.count()):
                 item = self.gallery_list.item(i)
                 if item.data(Qt.ItemDataRole.UserRole) == image_path:
-                    thumb_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    thumb_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                                                Qt.TransformationMode.FastTransformation)
                     item.setIcon(QIcon(thumb_pixmap))
                     break
 
@@ -1204,16 +1336,16 @@ class MainWindow(FluentWindow):
             return
             
         h, w, c = img_uint8.shape
-        self._current_orig_data = img_uint8.data.tobytes()
-        qimg = QImage(self._current_orig_data, w, h, w * 3, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg)
+        bytes_per_line = w * 3
+        qimg = QImage(img_uint8.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg.copy())
         self.original_pixmap_raw = pixmap
         
-        # Show immediate preview and store scaled version for compare
-        scaled = pixmap.scaled(self.preview_lbl.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        self.original_pixmap_scaled = scaled  # Store for compare functionality
+        # 优化: 使用缓存的缩放
+        scaled = self._get_scaled_pixmap(pixmap, self.preview_lbl.size())
+        self.original_pixmap_scaled = scaled
         self.preview_lbl.setPixmap(scaled)
-        self.preview_lbl.repaint()
+        self.preview_lbl.update()
 
     def on_error(self, msg):
         self.preview_lbl.setText(f"{tr('error')}: {msg}")
@@ -1303,13 +1435,18 @@ class MainWindow(FluentWindow):
                 normalized_path = os.path.normpath(self.current_raw_path)
                 send2trash.send2trash(normalized_path)
                 
-                # Remove from marked files if it was marked
+                # 优化: 清理所有相关缓存
                 if self.current_raw_path in self.marked_files:
                     self.marked_files.remove(self.current_raw_path)
                 
-                # Remove from params cache
                 if self.current_raw_path in self.file_params_cache:
                     del self.file_params_cache[self.current_raw_path]
+                
+                if self.current_raw_path in self.file_baseline_params_cache:
+                    del self.file_baseline_params_cache[self.current_raw_path]
+                
+                if self.current_raw_path in self.thumbnail_cache:
+                    del self.thumbnail_cache[self.current_raw_path]
                 
                 # Find and remove from gallery
                 current_row = self.gallery_list.currentRow()
@@ -1338,8 +1475,13 @@ class MainWindow(FluentWindow):
                 InfoBar.error(tr('delete_failed'), str(e), parent=self)
 
     def show_original(self, event):
-        """Show original image when mouse is pressed or button is held"""
-        if hasattr(self, 'original_pixmap_scaled') and self.original_pixmap_scaled:
+        """Show baseline image when mouse is pressed or button is held"""
+        # 优先显示保存的基准点图像
+        if self.current_baseline_pixmap:
+            self.preview_lbl.setPixmap(self.current_baseline_pixmap)
+            InfoBar.info(tr('hold_to_compare'), tr('compare_showing_baseline'), duration=1000, parent=self)
+        elif hasattr(self, 'original_pixmap_scaled') and self.original_pixmap_scaled:
+            # 如果没有保存基准点，则显示原始图像
             self.preview_lbl.setPixmap(self.original_pixmap_scaled)
             InfoBar.info(tr('hold_to_compare'), tr('compare_showing_original'), duration=1000, parent=self)
         else:
@@ -1487,6 +1629,41 @@ class MainWindow(FluentWindow):
         
         self.export_thread.finished_sig.connect(on_finish)
         self.export_thread.start()
+    
+    def _get_scaled_pixmap(self, pixmap, target_size):
+        """优化的缩放方法 - 使用缓存避免重复缩放"""
+        # 生成缓存键
+        pixmap_id = id(pixmap)
+        size_key = (target_size.width(), target_size.height())
+        cache_key = (pixmap_id, size_key)
+        
+        # 检查缓存
+        if cache_key in self._scaled_pixmap_cache:
+            return self._scaled_pixmap_cache[cache_key]
+        
+        # 执行缩放
+        scaled = pixmap.scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        
+        # 更新缓存 (LRU策略)
+        if len(self._scaled_pixmap_cache) >= self._max_cache_size:
+            # 移除最旧的条目
+            self._scaled_pixmap_cache.pop(next(iter(self._scaled_pixmap_cache)))
+        
+        self._scaled_pixmap_cache[cache_key] = scaled
+        return scaled
+    
+    def resizeEvent(self, event):
+        """窗口大小改变时清理缩放缓存"""
+        super().resizeEvent(event)
+        # 清理缩放缓存,因为目标尺寸已改变
+        self._scaled_pixmap_cache.clear()
+        
+        # 如果有当前图像,重新缩放显示
+        if hasattr(self, '_last_processed_pixmap_full') and self._last_processed_pixmap_full:
+            scaled = self._get_scaled_pixmap(self._last_processed_pixmap_full, self.preview_lbl.size())
+            self.preview_lbl.setPixmap(scaled)
+            self.last_processed_pixmap = scaled
 
 
 def launch_gui():
