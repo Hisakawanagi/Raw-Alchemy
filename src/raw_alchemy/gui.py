@@ -93,6 +93,7 @@ class ProcessRequest:
 class ThumbnailWorker(QThread):
     """Scan folder and generate thumbnails - 优化版本使用线程池"""
     thumbnail_ready = pyqtSignal(str, QImage)
+    progress_update = pyqtSignal(int, int)  # current, total
     finished_scanning = pyqtSignal()
 
     def __init__(self, folder_path, max_workers=4):
@@ -142,14 +143,58 @@ class ThumbnailWorker(QThread):
                         if os.path.splitext(f)[1].lower() in SUPPORTED_RAW_EXTENSIONS])
         
         full_paths = [os.path.join(self.folder_path, f) for f in files]
+        total = len(full_paths)
         
-        # 使用线程池并行处理缩略图提取
+        # 使用滑动窗口策略：维持有限的并发任务，确保顺序发送
+        from concurrent.futures import Future
+        
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            for full_path, scaled_image in executor.map(self.extract_thumbnail, full_paths):
+            # 使用字典维护 (index, future) 对，确保按顺序处理
+            pending_futures = {}
+            next_to_emit = 0  # 下一个应该发送的索引
+            
+            # 初始提交一批任务
+            for i in range(min(self.max_workers * 2, total)):
                 if self.stopped:
                     break
-                if full_path and scaled_image:
-                    self.thumbnail_ready.emit(full_path, scaled_image)
+                future = executor.submit(self.extract_thumbnail, full_paths[i])
+                pending_futures[i] = future
+            
+            submitted = min(self.max_workers * 2, total)
+            
+            # 主循环：等待并按顺序发送结果
+            while next_to_emit < total:
+                if self.stopped:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                
+                # 等待下一个应该发送的任务完成
+                if next_to_emit in pending_futures:
+                    future = pending_futures[next_to_emit]
+                    try:
+                        full_path, scaled_image = future.result(timeout=30)
+                        if full_path and scaled_image:
+                            self.thumbnail_ready.emit(full_path, scaled_image)
+                            # 强制主线程立即处理这个信号
+                            time.sleep(0.02)  # 20ms 让UI有足够时间渲染
+                        
+                        self.progress_update.emit(next_to_emit + 1, total)
+                    except Exception as e:
+                        print(f"Error processing thumbnail {full_paths[next_to_emit]}: {e}")
+                        self.progress_update.emit(next_to_emit + 1, total)
+                    
+                    # 移除已完成的任务
+                    del pending_futures[next_to_emit]
+                    next_to_emit += 1
+                    
+                    # 提交新任务填充窗口
+                    if submitted < total and not self.stopped:
+                        future = executor.submit(self.extract_thumbnail, full_paths[submitted])
+                        pending_futures[submitted] = future
+                        submitted += 1
+                else:
+                    # 如果索引不在队列中（理论上不应该发生），跳过
+                    next_to_emit += 1
         
         self.finished_scanning.emit()
 
@@ -162,7 +207,7 @@ class ImageProcessor(QThread):
     No more params_dirty, no more mode/running_mode confusion.
     """
     result_ready = pyqtSignal(np.ndarray, np.ndarray, str, int, float)  # img_uint8, img_float, path, request_id, applied_ev
-    original_ready = pyqtSignal(np.ndarray, str, int, float)  # original_img, path, request_id, applied_ev
+    load_complete = pyqtSignal(str, int)  # path, request_id - signals RAW loading is done
     error_occurred = pyqtSignal(str)
 
     def __init__(self):
@@ -269,30 +314,10 @@ class ImageProcessor(QThread):
             
             self.cached_linear = img
             
-            # Generate original preview (auto-exposed, lens-corrected)
-            orig_preview = img.copy()
-            
-            if self.exif_data:
-                orig_preview = utils.apply_lens_correction(
-                    orig_preview, self.exif_data, custom_db_path=None
-                )
-            
-            source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
-            
-            class DummyLogger:
-                def info(self, *args, **kwargs):
-                    pass
-            
-            # Capture the applied EV from auto exposure
-            _, gain = metering.apply_auto_exposure(orig_preview, source_cs, 'matrix', logger=DummyLogger())
-            applied_ev = np.log2(gain)  # Convert gain to EV
-            
-            utils.apply_saturation_and_contrast(orig_preview, saturation=1.25, contrast=1.1)
-            utils.bt709_to_srgb_inplace(orig_preview)
-            orig_preview = np.clip(orig_preview, 0, 1)
-            orig_uint8 = (orig_preview * 255).astype(np.uint8)
-            
-            self.original_ready.emit(orig_uint8, path, request.request_id, applied_ev)
+            # Signal that loading is complete
+            # Don't generate a processed preview here - let _do_process handle all processing
+            # This eliminates duplicate lens correction and ensures consistent processing
+            self.load_complete.emit(path, request.request_id)
 
     def _do_process(self, request: ProcessRequest):
         """Process image with parameters"""
@@ -430,7 +455,7 @@ class HistogramWidget(QWidget):
             
         try:
              # 使用更激进的采样率提升性能 (8x vs 4x)
-             self.hist_data = utils.compute_histogram_fast(self.pending_data, bins=100, sample_rate=8)
+             self.hist_data = utils.compute_histogram_fast(self.pending_data, bins=100, sample_rate=4)
              self.update()  # 使用update()而非repaint(),让Qt优化重绘
              self.pending_data = None
         except Exception as e:
@@ -567,7 +592,7 @@ class InspectorPanel(ScrollArea):
         self.exp_slider = Slider(Qt.Orientation.Horizontal)
         self.exp_slider.setRange(-100, 100) # -10.0 to 10.0
         self.exp_slider.setValue(0)
-        self.exp_slider.repaint()
+        self.exp_slider.update()
         
         # Add exposure value label
         self.exp_value_label = BodyLabel(tr('exposure_ev') + ": 0.0")
@@ -598,9 +623,17 @@ class InspectorPanel(ScrollArea):
         # Log Space
         color_layout.addWidget(BodyLabel(tr('log_space')))
         self.log_combo = ComboBox()
+        # Store log space mapping: display text -> internal key
+        self.log_space_map = {tr('none'): 'None'}
+        # Map actual log space names to themselves
+        for log_name in config.LOG_TO_WORKING_SPACE.keys():
+            self.log_space_map[log_name] = log_name
+        # Reverse mapping: internal key -> display text
+        self.log_space_reverse_map = {v: k for k, v in self.log_space_map.items()}
+        
         log_items = [tr('none')] + list(config.LOG_TO_WORKING_SPACE.keys())
         self.log_combo.addItems(log_items)
-        self.log_combo.setCurrentText('None')
+        self.log_combo.setCurrentText(tr('none'))
         self.log_combo.currentTextChanged.connect(self._on_param_change)
         color_layout.addWidget(self.log_combo)
         
@@ -725,13 +758,15 @@ class InspectorPanel(ScrollArea):
         if 'exposure' in params:
             exp_val = params['exposure']
             self.exp_slider.setValue(int(exp_val * 10))
-            self.exp_slider.repaint()
+            self.exp_slider.update()
             # Update the exposure value label
             self.exp_value_label.setText(f"{tr('exposure_ev')}: {exp_val:+.1f}")
             
         # Color
         if 'log_space' in params:
-            self.log_combo.setCurrentText(params['log_space'])
+            # Use reverse map to convert internal key to display text
+            display_text = self.log_space_reverse_map.get(params['log_space'], tr('none'))
+            self.log_combo.setCurrentText(display_text)
         
         # LUT (Path reconstruction logic needed if we only store path)
         # Assuming lut_path is full path
@@ -837,7 +872,7 @@ class InspectorPanel(ScrollArea):
             # Display auto mode EV
             # self.exp_slider.blockSignals(True)
             self.exp_slider.setValue(int(self.auto_ev_value * 10))
-            self.exp_slider.repaint()  # Force immediate visual refresh
+            self.exp_slider.update()  # Force immediate visual refresh
             # self.exp_slider.blockSignals(False)
             # Update label manually
             self.exp_value_label.setText(f"{tr('exposure_ev')}: {self.auto_ev_value:+.1f}")
@@ -846,7 +881,7 @@ class InspectorPanel(ScrollArea):
             self.auto_ev_value = self.exp_slider.value() / 10.0
             # self.exp_slider.blockSignals(True)
             self.exp_slider.setValue(int(self.manual_ev_value * 10))
-            self.exp_slider.repaint()  # Force immediate visual refresh
+            self.exp_slider.update()  # Force immediate visual refresh
             # self.exp_slider.blockSignals(False)
             # Update label manually
             self.exp_value_label.setText(f"{tr('exposure_ev')}: {self.manual_ev_value:+.1f}")
@@ -875,12 +910,12 @@ class InspectorPanel(ScrollArea):
 
     def reset_params(self):
         self.auto_exp_radio.setChecked(True)  # Default to Auto Exposure
-        self.metering_combo.setCurrentText('Matrix')
+        self.metering_combo.setCurrentText(tr('matrix'))
         self._update_exposure_ui_state()
         self.exp_slider.setValue(0)
-        self.exp_slider.repaint()
+        self.exp_slider.update()
         self.exp_value_label.setText(tr('exposure_ev') + ": 0.0")
-        self.log_combo.setCurrentText('None')
+        self.log_combo.setCurrentText(tr('none'))
         self.lut_combo.setCurrentIndex(0)
         self.lens_correct_switch.setChecked(True)  # Default enabled
         self.db_path_edit.clear()
@@ -897,11 +932,15 @@ class InspectorPanel(ScrollArea):
         metering_display_text = self.metering_combo.currentText()
         metering_internal_key = self.metering_mode_map.get(metering_display_text, 'matrix')
         
+        # Get internal log space key from display text
+        log_display_text = self.log_combo.currentText()
+        log_internal_key = self.log_space_map.get(log_display_text, 'None')
+        
         p = {
             'exposure_mode': 'Auto' if self.auto_exp_radio.isChecked() else 'Manual',
             'metering_mode': metering_internal_key,
             'exposure': self.exp_slider.value() / 10.0, # Scale factor for EV
-            'log_space': self.log_combo.currentText(),
+            'log_space': log_internal_key,
             'lut_path': os.path.join(self.lut_folder, self.lut_combo.currentText()) if self.lut_folder and self.lut_combo.currentIndex() > 0 else None,
             'lens_correct': self.lens_correct_switch.isChecked(),
             'custom_db_path': self.db_path_edit.text() if self.db_path_edit.text() else None
@@ -946,7 +985,7 @@ class MainWindow(FluentWindow):
         self.thumb_worker = None
         self.processor = ImageProcessor()
         self.processor.result_ready.connect(self.on_process_result)
-        self.processor.original_ready.connect(self.on_original_ready)
+        self.processor.load_complete.connect(self.on_load_complete)
         self.processor.error_occurred.connect(self.on_error)
         
         # Baseline processor
@@ -1034,8 +1073,14 @@ class MainWindow(FluentWindow):
         self.open_btn = PrimaryPushButton(FIF.FOLDER, tr('open_folder'))
         self.open_btn.clicked.connect(self.browse_folder)
         
+        # 添加加载提示标签
+        self.loading_label = CaptionLabel("")
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading_label.hide()
+        
         self.left_layout.addWidget(SubtitleLabel(tr('library')))
         self.left_layout.addWidget(self.gallery_list)
+        self.left_layout.addWidget(self.loading_label)
         self.left_layout.addWidget(self.open_btn)
         
         # 2. Center Panel (Preview)
@@ -1218,9 +1263,23 @@ class MainWindow(FluentWindow):
             self.thumb_worker.stop()
             self.thumb_worker.wait()
         
+        # 显示加载提示
+        self.loading_label.setText(tr('loading_thumbnails'))
+        self.loading_label.show()
+        
         self.thumb_worker = ThumbnailWorker(folder)
         self.thumb_worker.thumbnail_ready.connect(self.add_gallery_item)
+        self.thumb_worker.progress_update.connect(self.on_thumbnail_progress)
+        self.thumb_worker.finished_scanning.connect(self.on_thumbnail_finished)
         self.thumb_worker.start()
+    
+    def on_thumbnail_progress(self, current, total):
+        """更新缩略图加载进度"""
+        self.loading_label.setText(f"{tr('loading_thumbnails')}: {current}/{total}")
+    
+    def on_thumbnail_finished(self):
+        """缩略图加载完成"""
+        self.loading_label.hide()
 
     def add_gallery_item(self, path, image):
         name = os.path.basename(path)
@@ -1244,6 +1303,9 @@ class MainWindow(FluentWindow):
             item.setText(name)
         
         self.gallery_list.addItem(item)
+        
+        # 每次添加后立即刷新UI，确保缩略图逐个显示
+        QApplication.processEvents()
 
     def on_gallery_item_clicked(self, item):
         if not item:
@@ -1269,7 +1331,7 @@ class MainWindow(FluentWindow):
             self.right_panel.auto_ev_value = 0.0
             # self.right_panel.exp_slider.blockSignals(True)
             self.right_panel.exp_slider.setValue(0)
-            self.right_panel.exp_slider.repaint()  # Force visual refresh
+            self.right_panel.exp_slider.update()  # Force visual refresh
             # self.right_panel.exp_slider.blockSignals(False)
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: 0.0")
         
@@ -1279,9 +1341,9 @@ class MainWindow(FluentWindow):
         else:
             # Keep previous params (inherit from previous image)
             # We do NOT reset params here, so the new image inherits current UI settings
-            # Just trigger a param change to ensure pipeline picks it up for new image
+            # Processing will be triggered automatically by on_original_ready()
             # This ensures ALL settings (Exposure, WB, LUT, etc.) are carried over
-            self.right_panel._on_param_change()
+            pass
         
         # 5. Update mark button state
         self.update_mark_button_state()
@@ -1394,7 +1456,7 @@ class MainWindow(FluentWindow):
             # Update display without triggering param change
             # self.right_panel.exp_slider.blockSignals(True)
             self.right_panel.exp_slider.setValue(int(applied_ev * 10))
-            self.right_panel.exp_slider.repaint()  # Force immediate visual refresh
+            self.right_panel.exp_slider.update()  # Force immediate visual refresh
             # self.right_panel.exp_slider.blockSignals(False)
             # Manually update label since blockSignals prevented valueChanged
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: {applied_ev:+.1f}")
@@ -1408,35 +1470,14 @@ class MainWindow(FluentWindow):
         # Update histogram
         self.right_panel.hist_widget.update_data(img_float)
 
-    def on_original_ready(self, img_uint8, image_path, request_id, applied_ev):
+    def on_load_complete(self, image_path, request_id):
+        """Handle RAW loading completion"""
         # Ignore stale results
         if request_id != self.current_request_id or image_path != self.current_raw_path:
             return
         
-        h, w, c = img_uint8.shape
-        bytes_per_line = w * 3
-        qimg = QImage(img_uint8.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg.copy())
-        
-        # Update original state
-        self.original.update_full(pixmap)
-        
-        # Update auto EV value and slider if in auto mode
-        if self.right_panel.auto_exp_radio.isChecked():
-            self.right_panel.auto_ev_value = applied_ev
-            # Update display without triggering param change
-            # self.right_panel.exp_slider.blockSignals(True)
-            self.right_panel.exp_slider.setValue(int(applied_ev * 10))
-            self.right_panel.exp_slider.repaint()  # Force immediate visual refresh
-            # self.right_panel.exp_slider.blockSignals(False)
-            # Manually update label since blockSignals prevented valueChanged
-            self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: {applied_ev:+.1f}")
-        
-        # Display original first
-        display_pixmap = self.original.get_display(self.preview_lbl.size())
-        if display_pixmap:
-            self.preview_lbl.setPixmap(display_pixmap)
-            self.preview_lbl.update()
+        # RAW loading is complete, show processing message
+        self.preview_lbl.setText(tr('processing'))
         
         # Trigger processing - but only if still the current image
         # Capture path to avoid race condition with fast image switching
@@ -1612,17 +1653,21 @@ class MainWindow(FluentWindow):
         # Remove the RAW extension from the default filename to avoid "123.RW2.jpg"
         base_name_without_ext = os.path.splitext(os.path.basename(self.current_raw_path))[0]
         
-        path, _ = QFileDialog.getSaveFileName(
+        path, selected_filter = QFileDialog.getSaveFileName(
             self,
             tr('export_image'),
             base_name_without_ext,  # Use filename without extension, Qt will add the selected format extension
             "JPEG (*.jpg);;HEIF (*.heif);;TIFF (*.tif)"
         )
-        if path:
+        
+        # Check if user clicked OK and provided a valid path
+        if path and len(path.strip()) > 0:
             self.run_export(
                 input_path=self.current_raw_path,
                 output_path=path
             )
+        else:
+            print("[Export] User cancelled or no path selected")
 
     def export_all(self):
         if not self.marked_files:

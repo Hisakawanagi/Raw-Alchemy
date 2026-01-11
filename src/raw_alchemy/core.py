@@ -77,7 +77,8 @@ def process_image(
     else:
         # 路径 B: 自动测光（使用策略模式）
         logger.info(f"  🔹 [Step 2] Auto Exposure ({metering_mode})")
-        img = apply_auto_exposure(img, source_cs, metering_mode, target_gray=0.18, logger=logger)
+        img, applied_gain = apply_auto_exposure(img, source_cs, metering_mode, target_gray=0.18, logger=logger)
+
 
     # --- Step 3: 基础校正 (WB, Lens, HL/SH) ---
     
