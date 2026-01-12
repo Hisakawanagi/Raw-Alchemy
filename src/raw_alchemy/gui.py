@@ -7,6 +7,7 @@ import numpy as np
 import rawpy
 import colour
 import gc
+import tomllib
 from typing import Optional, Dict
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -31,6 +32,41 @@ from qfluentwidgets import (
 from raw_alchemy import config, utils, orchestrator, metering, lensfun_wrapper, i18n
 from raw_alchemy.i18n import tr
 from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
+
+# ==============================================================================
+#                               Version & License Info
+# ==============================================================================
+
+def get_version_info():
+    """Read version and license from pyproject.toml"""
+    try:
+        # Get the project root directory (parent of src)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        pyproject_path = os.path.join(project_root, 'pyproject.toml')
+        
+        if os.path.exists(pyproject_path):
+            with open(pyproject_path, 'rb') as f:
+                data = tomllib.load(f)
+                version = data.get('project', {}).get('version', '0.0.0')
+                # Extract license from classifiers
+                classifiers = data.get('project', {}).get('classifiers', [])
+                license_info = 'AGPL-3.0'  # Default
+                for classifier in classifiers:
+                    if 'License ::' in classifier:
+                        # Extract license name from classifier
+                        license_name = classifier.split('::')[-1].strip()
+                        # Simplify AGPL license name
+                        if 'Affero' in license_name or 'AGPL' in classifier:
+                            license_info = 'AGPL-3.0'
+                        else:
+                            license_info = license_name
+                        break
+                return version, license_info
+    except Exception as e:
+        print(f"Warning: Could not read version info: {e}")
+    
+    return '0.0.0', 'AGPL-3.0'
 
 # ==============================================================================
 #                               Data Structures
@@ -980,6 +1016,8 @@ class MainWindow(FluentWindow):
         
         self.create_ui()
         self.create_settings_interface()
+        self.create_help_interface()
+        self.create_about_interface()
         
         # Workers
         self.thumb_worker = None
@@ -1204,6 +1242,202 @@ class MainWindow(FluentWindow):
         
         # Add settings interface to navigation
         self.addSubInterface(self.settings_widget, FIF.SETTING, tr('settings'))
+    
+    def create_help_interface(self):
+        """Create help interface with user guide"""
+        self.help_widget = QWidget()
+        self.help_widget.setObjectName("helpWidget")
+        
+        # Create scroll area for help content
+        help_scroll = ScrollArea(self.help_widget)
+        help_scroll.setWidgetResizable(True)
+        help_scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        
+        help_content = QWidget()
+        help_content.setObjectName("helpContent")
+        help_content.setStyleSheet("#helpContent { background-color: transparent; }")
+        help_layout = QVBoxLayout(help_content)
+        help_layout.setContentsMargins(40, 40, 40, 40)
+        help_layout.setSpacing(20)
+        
+        # Title
+        title = SubtitleLabel(tr('help_title'))
+        help_layout.addWidget(title)
+        
+        # Overview Section
+        overview_card = SimpleCardWidget()
+        overview_layout = QVBoxLayout(overview_card)
+        overview_layout.setSpacing(10)
+        overview_title = StrongBodyLabel(tr('help_overview'))
+        overview_text = BodyLabel(tr('help_overview_text'))
+        overview_text.setWordWrap(True)
+        overview_layout.addWidget(overview_title)
+        overview_layout.addWidget(overview_text)
+        help_layout.addWidget(overview_card)
+        
+        # Workflow Section
+        workflow_card = SimpleCardWidget()
+        workflow_layout = QVBoxLayout(workflow_card)
+        workflow_layout.setSpacing(10)
+        workflow_title = StrongBodyLabel(tr('help_workflow'))
+        workflow_text = BodyLabel(tr('help_workflow_text'))
+        workflow_text.setWordWrap(True)
+        workflow_layout.addWidget(workflow_title)
+        workflow_layout.addWidget(workflow_text)
+        help_layout.addWidget(workflow_card)
+        
+        # Shortcuts Section
+        shortcuts_card = SimpleCardWidget()
+        shortcuts_layout = QVBoxLayout(shortcuts_card)
+        shortcuts_layout.setSpacing(10)
+        shortcuts_title = StrongBodyLabel(tr('help_shortcuts'))
+        shortcuts_text = BodyLabel(tr('help_shortcuts_text'))
+        shortcuts_text.setWordWrap(True)
+        shortcuts_layout.addWidget(shortcuts_title)
+        shortcuts_layout.addWidget(shortcuts_text)
+        help_layout.addWidget(shortcuts_card)
+        
+        # Features Guide Section
+        features_title = StrongBodyLabel(tr('help_features'))
+        help_layout.addWidget(features_title)
+        
+        # Exposure Control
+        exposure_card = SimpleCardWidget()
+        exposure_layout = QVBoxLayout(exposure_card)
+        exposure_layout.setSpacing(10)
+        exposure_title = StrongBodyLabel(tr('help_exposure'))
+        exposure_text = BodyLabel(tr('help_exposure_text'))
+        exposure_text.setWordWrap(True)
+        exposure_layout.addWidget(exposure_title)
+        exposure_layout.addWidget(exposure_text)
+        help_layout.addWidget(exposure_card)
+        
+        # Color Management
+        color_card = SimpleCardWidget()
+        color_layout = QVBoxLayout(color_card)
+        color_layout.setSpacing(10)
+        color_title = StrongBodyLabel(tr('help_color'))
+        color_text = BodyLabel(tr('help_color_text'))
+        color_text.setWordWrap(True)
+        color_layout.addWidget(color_title)
+        color_layout.addWidget(color_text)
+        help_layout.addWidget(color_card)
+        
+        # Lens Correction
+        lens_card = SimpleCardWidget()
+        lens_layout = QVBoxLayout(lens_card)
+        lens_layout.setSpacing(10)
+        lens_title = StrongBodyLabel(tr('help_lens'))
+        lens_text = BodyLabel(tr('help_lens_text'))
+        lens_text.setWordWrap(True)
+        lens_layout.addWidget(lens_title)
+        lens_layout.addWidget(lens_text)
+        help_layout.addWidget(lens_card)
+        
+        # Adjustments
+        adjustments_card = SimpleCardWidget()
+        adjustments_layout = QVBoxLayout(adjustments_card)
+        adjustments_layout.setSpacing(10)
+        adjustments_title = StrongBodyLabel(tr('help_adjustments'))
+        adjustments_text = BodyLabel(tr('help_adjustments_text'))
+        adjustments_text.setWordWrap(True)
+        adjustments_layout.addWidget(adjustments_title)
+        adjustments_layout.addWidget(adjustments_text)
+        help_layout.addWidget(adjustments_card)
+        
+        # Export Options
+        export_card = SimpleCardWidget()
+        export_layout = QVBoxLayout(export_card)
+        export_layout.setSpacing(10)
+        export_title = StrongBodyLabel(tr('help_export'))
+        export_text = BodyLabel(tr('help_export_text'))
+        export_text.setWordWrap(True)
+        export_layout.addWidget(export_title)
+        export_layout.addWidget(export_text)
+        help_layout.addWidget(export_card)
+        
+        help_layout.addStretch()
+        
+        help_scroll.setWidget(help_content)
+        
+        # Set layout for help widget
+        help_widget_layout = QVBoxLayout(self.help_widget)
+        help_widget_layout.setContentsMargins(0, 0, 0, 0)
+        help_widget_layout.addWidget(help_scroll)
+        
+        # Add help interface to navigation
+        self.addSubInterface(self.help_widget, FIF.QUESTION, tr('help'))
+    
+    def create_about_interface(self):
+        """Create about interface"""
+        self.about_widget = QWidget()
+        self.about_widget.setObjectName("aboutWidget")
+        about_layout = QVBoxLayout(self.about_widget)
+        about_layout.setContentsMargins(40, 40, 40, 40)
+        about_layout.setSpacing(20)
+        
+        # Get version and license info
+        version, license_info = get_version_info()
+        
+        # Title
+        title = SubtitleLabel(tr('about_title'))
+        about_layout.addWidget(title)
+        
+        # Description Card
+        desc_card = SimpleCardWidget()
+        desc_layout = QVBoxLayout(desc_card)
+        desc_layout.setSpacing(10)
+        desc_text = BodyLabel(tr('about_description'))
+        desc_text.setWordWrap(True)
+        desc_layout.addWidget(desc_text)
+        about_layout.addWidget(desc_card)
+        
+        # Version Card
+        version_card = SimpleCardWidget()
+        version_layout = QVBoxLayout(version_card)
+        version_layout.setSpacing(10)
+        version_title = StrongBodyLabel(tr('about_version'))
+        version_text = BodyLabel(version)
+        version_layout.addWidget(version_title)
+        version_layout.addWidget(version_text)
+        about_layout.addWidget(version_card)
+        
+        # License Card
+        license_card = SimpleCardWidget()
+        license_layout = QVBoxLayout(license_card)
+        license_layout.setSpacing(10)
+        license_title = StrongBodyLabel(tr('about_license'))
+        license_text = BodyLabel(license_info)
+        license_layout.addWidget(license_title)
+        license_layout.addWidget(license_text)
+        about_layout.addWidget(license_card)
+        
+        # Features Card
+        features_card = SimpleCardWidget()
+        features_layout = QVBoxLayout(features_card)
+        features_layout.setSpacing(10)
+        features_title = StrongBodyLabel(tr('about_features'))
+        features_text = BodyLabel(tr('about_features_list'))
+        features_text.setWordWrap(True)
+        features_layout.addWidget(features_title)
+        features_layout.addWidget(features_text)
+        about_layout.addWidget(features_card)
+        
+        # GitHub Card
+        github_card = SimpleCardWidget()
+        github_layout = QVBoxLayout(github_card)
+        github_layout.setSpacing(10)
+        github_title = StrongBodyLabel(tr('about_github'))
+        github_link = BodyLabel('<a href="https://github.com/shenmintao/Raw-alchemy">https://github.com/shenmintao/Raw-alchemy</a>')
+        github_link.setOpenExternalLinks(True)
+        github_layout.addWidget(github_title)
+        github_layout.addWidget(github_link)
+        about_layout.addWidget(github_card)
+        
+        about_layout.addStretch()
+        
+        # Add about interface to navigation
+        self.addSubInterface(self.about_widget, FIF.INFO, tr('about'))
     
     def on_language_changed(self, index):
         """Handle language change"""
@@ -1662,9 +1896,21 @@ class MainWindow(FluentWindow):
         
         # Check if user clicked OK and provided a valid path
         if path and len(path.strip()) > 0:
+            # 显示保存中通知
+            self.saving_infobar = InfoBar.info(
+                tr('saving'),
+                tr('saving_image'),
+                duration=-1,  # 持续显示直到手动关闭
+                parent=self
+            )
+            
+            # 禁用保存当前图片按钮
+            self.btn_export_curr.setEnabled(False)
+            
             self.run_export(
                 input_path=self.current_raw_path,
-                output_path=path
+                output_path=path,
+                is_single_export=True
             )
         else:
             print("[Export] User cancelled or no path selected")
@@ -1691,6 +1937,14 @@ class MainWindow(FluentWindow):
              fmt_map = {"JPEG": "jpg", "HEIF": "heif", "TIFF": "tif"}
              self.batch_export_ext = fmt_map.get(format_str, "jpg")
              
+             # 显示批量导出中通知
+             self.batch_saving_infobar = InfoBar.info(
+                 tr('saving'),
+                 tr('batch_exporting'),
+                 duration=-1,  # 持续显示直到手动关闭
+                 parent=self
+             )
+             
              # Initialize Progress UI
              self.export_progress.setRange(0, len(self.batch_export_list))
              self.export_progress.setValue(0)
@@ -1702,6 +1956,11 @@ class MainWindow(FluentWindow):
 
     def batch_export_next(self):
          if self.batch_export_idx >= len(self.batch_export_list):
+             # 关闭批量导出通知
+             if hasattr(self, 'batch_saving_infobar') and self.batch_saving_infobar:
+                 self.batch_saving_infobar.close()
+                 self.batch_saving_infobar = None
+             
              InfoBar.success(tr('batch_export'), tr('all_exported'), parent=self)
              self.export_progress.hide()
              self.btn_export_all.setEnabled(True)
@@ -1734,7 +1993,7 @@ class MainWindow(FluentWindow):
          self.run_export(input_path, output_path, params=params, callback=self.batch_export_next)
 
 
-    def run_export(self, input_path, output_path, params=None, callback=None):
+    def run_export(self, input_path, output_path, params=None, callback=None, is_single_export=False):
         # Gather params
         p = params if params else self.right_panel.get_params()
         
@@ -1776,6 +2035,13 @@ class MainWindow(FluentWindow):
         self.export_thread = ExportThread()
         
         def on_finish(success, msg):
+            # 如果是单个导出，关闭保存中通知并重新启用按钮
+            if is_single_export:
+                if hasattr(self, 'saving_infobar') and self.saving_infobar:
+                    self.saving_infobar.close()
+                    self.saving_infobar = None
+                self.btn_export_curr.setEnabled(True)
+            
             if success:
                 if not callback:
                     InfoBar.success(tr('export_success'), tr('saved_to', path=os.path.basename(output_path)), parent=self)
