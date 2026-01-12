@@ -8,6 +8,8 @@ import rawpy
 import colour
 import gc
 import tomllib
+import urllib.request
+import json
 from typing import Optional, Dict
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -236,6 +238,45 @@ class ThumbnailWorker(QThread):
 
     def stop(self):
         self.stopped = True
+
+
+class VersionCheckWorker(QThread):
+    """Check for new version from GitHub releases"""
+    version_checked = pyqtSignal(bool, str, str)  # success, latest_version, error_msg
+    
+    def __init__(self, current_version):
+        super().__init__()
+        self.current_version = current_version
+    
+    def run(self):
+        try:
+            # GitHub API endpoint for latest release
+            url = "https://api.github.com/repos/shenmintao/raw-alchemy/releases/latest"
+            
+            # Set timeout and user agent
+            req = urllib.request.Request(url)
+            req.add_header('User-Agent', 'Raw-Alchemy-Studio')
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                tag_name = data.get('tag_name', '')
+                
+                # Extract version from tag (e.g., "studio-v0.3.0" -> "0.3.0")
+                # Remove common prefixes like "v", "studio-v", etc.
+                latest_version = tag_name
+                for prefix in ['studio-v', 'v']:
+                    if latest_version.startswith(prefix):
+                        latest_version = latest_version[len(prefix):]
+                        break
+                
+                if latest_version:
+                    self.version_checked.emit(True, latest_version, "")
+                else:
+                    self.version_checked.emit(False, "", "Invalid response from server")
+                    
+        except Exception as e:
+            self.version_checked.emit(False, "", str(e))
+
 
 class ImageProcessor(QThread):
     """
@@ -1393,7 +1434,7 @@ class MainWindow(FluentWindow):
         about_layout.setSpacing(20)
         
         # Get version and license info
-        version, license_info = get_version_info()
+        self.current_version, license_info = get_version_info()
         
         # Title
         title = SubtitleLabel(tr('about_title'))
@@ -1408,14 +1449,20 @@ class MainWindow(FluentWindow):
         desc_layout.addWidget(desc_text)
         about_layout.addWidget(desc_card)
         
-        # Version Card
+        # Version Card with Check Update Button
         version_card = SimpleCardWidget()
         version_layout = QVBoxLayout(version_card)
         version_layout.setSpacing(10)
         version_title = StrongBodyLabel(tr('about_version'))
-        version_text = BodyLabel(version)
+        version_text = BodyLabel(self.current_version)
+        
+        # Check Update Button
+        self.check_update_btn = PushButton(tr('check_update'))
+        self.check_update_btn.clicked.connect(self.check_for_updates)
+        
         version_layout.addWidget(version_title)
         version_layout.addWidget(version_text)
+        version_layout.addWidget(self.check_update_btn)
         about_layout.addWidget(version_card)
         
         # License Card
@@ -1454,6 +1501,88 @@ class MainWindow(FluentWindow):
         
         # Add about interface to navigation
         self.addSubInterface(self.about_widget, FIF.INFO, tr('about'))
+    
+    def check_for_updates(self):
+        """Check for new version from GitHub"""
+        # Disable button and show checking message
+        self.check_update_btn.setEnabled(False)
+        self.check_update_btn.setText(tr('checking_update'))
+        
+        # Create and start version check worker
+        self.version_worker = VersionCheckWorker(self.current_version)
+        self.version_worker.version_checked.connect(self.on_version_checked)
+        self.version_worker.start()
+    
+    def on_version_checked(self, success, latest_version, error_msg):
+        """Handle version check result"""
+        # Re-enable button
+        self.check_update_btn.setEnabled(True)
+        self.check_update_btn.setText(tr('check_update'))
+        
+        if not success:
+            # Show error message
+            InfoBar.error(
+                tr('update_check_failed'),
+                tr('update_check_error', error=error_msg),
+                parent=self
+            )
+            return
+        
+        # Compare versions
+        from packaging import version as pkg_version
+        try:
+            current = pkg_version.parse(self.current_version)
+            latest = pkg_version.parse(latest_version)
+            
+            if latest > current:
+                # New version available - show dialog
+                from PyQt6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self,
+                    tr('update_available'),
+                    tr('update_available_message',
+                       version=latest_version,
+                       current=self.current_version,
+                       latest=latest_version),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Open releases page in browser
+                    import webbrowser
+                    webbrowser.open('https://github.com/shenmintao/raw-alchemy/releases/latest')
+            else:
+                # Already up to date
+                InfoBar.success(
+                    tr('no_update'),
+                    tr('no_update_message', version=self.current_version),
+                    parent=self
+                )
+        except Exception as e:
+            # Fallback: simple string comparison
+            if latest_version != self.current_version:
+                from PyQt6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self,
+                    tr('update_available'),
+                    tr('update_available_message',
+                       version=latest_version,
+                       current=self.current_version,
+                       latest=latest_version),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    import webbrowser
+                    webbrowser.open('https://github.com/shenmintao/raw-alchemy/releases/latest')
+            else:
+                InfoBar.success(
+                    tr('no_update'),
+                    tr('no_update_message', version=self.current_version),
+                    parent=self
+                )
     
     def on_language_changed(self, index):
         """Handle language change"""

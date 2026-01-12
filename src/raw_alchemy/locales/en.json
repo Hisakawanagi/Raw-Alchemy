@@ -105,5 +105,13 @@
     "processing": "Processing...",
     "saving": "Saving",
     "saving_image": "Saving image, please wait...",
-    "batch_exporting": "Batch exporting, please wait..."
+    "batch_exporting": "Batch exporting, please wait...",
+    "check_update": "Check for Updates",
+    "checking_update": "Checking for updates...",
+    "update_available": "Update Available",
+    "update_available_message": "A new version {version} is available!\n\nCurrent version: {current}\nLatest version: {latest}\n\nWould you like to visit the download page?",
+    "no_update": "Up to Date",
+    "no_update_message": "You are running the latest version {version}.",
+    "update_check_failed": "Update Check Failed",
+    "update_check_error": "Failed to check for updates: {error}"
 }

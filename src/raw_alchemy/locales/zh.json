@@ -105,5 +105,13 @@
     "processing": "处理中...",
     "saving": "保存中",
     "saving_image": "正在保存图片，请稍候...",
-    "batch_exporting": "正在批量导出，请稍候..."
+    "batch_exporting": "正在批量导出，请稍候...",
+    "check_update": "检查更新",
+    "checking_update": "正在检查更新...",
+    "update_available": "发现新版本",
+    "update_available_message": "发现新版本 {version}！\n\n当前版本: {current}\n最新版本: {latest}\n\n是否前往下载页面？",
+    "no_update": "已是最新版本",
+    "no_update_message": "当前版本 {version} 已是最新版本。",
+    "update_check_failed": "检查更新失败",
+    "update_check_error": "无法检查更新: {error}"
 }

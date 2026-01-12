@@ -26,7 +26,8 @@ dependencies = [
     "numba",
     "matplotlib",
     "PyQt6-Fluent-Widgets",
-    "Send2Trash"
+    "Send2Trash",
+    "packaging"
 ]
 
 [project.urls]
