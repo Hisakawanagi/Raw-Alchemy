@@ -885,9 +885,22 @@ class InspectorPanel(ScrollArea):
         self.v_layout.addWidget(widget)
 
     def _browse_lut_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, tr('select_lut_folder'))
+        # Get the main window to access last_lut_folder_path
+        main_window = self.window()
+        
+        # Use last LUT folder path, or fall back to last gallery folder, or home
+        start_dir = ""
+        if hasattr(main_window, 'last_lut_folder_path') and main_window.last_lut_folder_path and os.path.exists(main_window.last_lut_folder_path):
+            start_dir = main_window.last_lut_folder_path
+        elif hasattr(main_window, 'last_folder_path') and main_window.last_folder_path and os.path.exists(main_window.last_folder_path):
+            start_dir = main_window.last_folder_path
+        
+        folder = QFileDialog.getExistingDirectory(self, tr('select_lut_folder'), start_dir)
         if folder:
             self.lut_folder = folder
+            # Remember this path in main window
+            if hasattr(main_window, 'last_lut_folder_path'):
+                main_window.last_lut_folder_path = folder
             self.refresh_lut_list()
 
     def refresh_lut_list(self):
@@ -898,14 +911,27 @@ class InspectorPanel(ScrollArea):
         self.lut_combo.addItems(files)
     
     def _browse_lensfun_db(self):
+        # Get the main window to access last_lensfun_db_path
+        main_window = self.window()
+        
+        # Use last Lensfun DB path's directory, or fall back to last gallery folder, or home
+        start_dir = ""
+        if hasattr(main_window, 'last_lensfun_db_path') and main_window.last_lensfun_db_path and os.path.exists(main_window.last_lensfun_db_path):
+            start_dir = os.path.dirname(main_window.last_lensfun_db_path)
+        elif hasattr(main_window, 'last_folder_path') and main_window.last_folder_path and os.path.exists(main_window.last_folder_path):
+            start_dir = main_window.last_folder_path
+        
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             tr('select_lensfun_db'),
-            "",
+            start_dir,
             "XML Files (*.xml);;All Files (*)"
         )
         if file_path:
             self.db_path_edit.setText(file_path)
+            # Remember this path in main window
+            if hasattr(main_window, 'last_lensfun_db_path'):
+                main_window.last_lensfun_db_path = file_path
             # 重新加载lensfun数据库
             try:
                 lensfun_wrapper.reload_lensfun_database(custom_db_path=file_path, logger=print)
@@ -1045,6 +1071,12 @@ class MainWindow(FluentWindow):
         self.thumbnail_cache = {}  # path -> original QPixmap
         self.file_baseline_params_cache = {}  # path -> baseline params dict
         
+        # Last used paths for file dialogs
+        self.last_folder_path = None  # Last opened gallery folder
+        self.last_lut_folder_path = None  # Last LUT folder
+        self.last_lensfun_db_path = None  # Last Lensfun DB path
+        self.last_export_path = None  # Last export folder
+        
         # Image states - clean replacement for scattered pixmap variables
         self.original = ImageState()  # RAW decoded
         self.current = ImageState()   # Processed with current params
@@ -1077,6 +1109,9 @@ class MainWindow(FluentWindow):
         self.update_timer.setSingleShot(True)
         self.update_timer.setInterval(100) # 100ms debounce
         self.update_timer.timeout.connect(self.trigger_processing)
+        
+        # Load saved settings
+        self.load_settings()
     
     def update_window_title(self):
         """更新窗口标题以显示当前文件名"""
@@ -1121,6 +1156,54 @@ class MainWindow(FluentWindow):
         import threading
         preload_thread = threading.Thread(target=preload, daemon=True)
         preload_thread.start()
+    
+    def load_settings(self):
+        """Load saved application settings"""
+        settings = i18n.load_app_settings()
+        
+        # Restore last folder path
+        if 'last_folder_path' in settings:
+            self.last_folder_path = settings['last_folder_path']
+            # Auto-open last folder if it still exists
+            if self.last_folder_path and os.path.exists(self.last_folder_path):
+                # Delay opening to ensure UI is ready
+                QTimer.singleShot(100, lambda: self._auto_open_folder(self.last_folder_path))
+        
+        # Restore LUT folder
+        if 'last_lut_folder_path' in settings:
+            self.last_lut_folder_path = settings['last_lut_folder_path']
+        
+        # Restore Lensfun DB path
+        if 'last_lensfun_db_path' in settings:
+            self.last_lensfun_db_path = settings['last_lensfun_db_path']
+        
+        # Restore export path
+        if 'last_export_path' in settings:
+            self.last_export_path = settings['last_export_path']
+        
+        # Restore inspector panel settings (Log, LUT, lens correction, etc.)
+        if 'inspector_params' in settings:
+            # Will be applied after UI is created
+            self.saved_inspector_params = settings['inspector_params']
+        else:
+            self.saved_inspector_params = None
+    
+    def _auto_open_folder(self, folder_path):
+        """Auto-open last used folder"""
+        if folder_path and os.path.exists(folder_path):
+            self.current_folder = folder_path
+            self.start_thumbnail_scan(folder_path)
+    
+    def save_settings(self):
+        """Save current application settings"""
+        settings = {
+            'last_folder_path': self.current_folder,
+            'last_lut_folder_path': self.last_lut_folder_path,
+            'last_lensfun_db_path': self.last_lensfun_db_path,
+            'last_export_path': self.last_export_path,
+            'inspector_params': self.right_panel.get_params()
+        }
+        i18n.save_app_settings(settings)
 
     def create_ui(self):
         # Central Layout
@@ -1259,6 +1342,31 @@ class MainWindow(FluentWindow):
 
         # Install event filter to capture keys globally
         QApplication.instance().installEventFilter(self)
+        
+        # Restore saved inspector settings after UI is created
+        if hasattr(self, 'saved_inspector_params') and self.saved_inspector_params:
+            QTimer.singleShot(200, lambda: self._restore_inspector_settings())
+    
+    def _restore_inspector_settings(self):
+        """Restore saved inspector panel settings"""
+        if hasattr(self, 'saved_inspector_params') and self.saved_inspector_params:
+            params = self.saved_inspector_params
+            
+            # Restore LUT folder if saved
+            if self.last_lut_folder_path and os.path.exists(self.last_lut_folder_path):
+                self.right_panel.lut_folder = self.last_lut_folder_path
+                self.right_panel.refresh_lut_list()
+            
+            # Restore Lensfun DB path if saved
+            if self.last_lensfun_db_path and os.path.exists(self.last_lensfun_db_path):
+                self.right_panel.db_path_edit.setText(self.last_lensfun_db_path)
+                try:
+                    lensfun_wrapper.reload_lensfun_database(custom_db_path=self.last_lensfun_db_path, logger=print)
+                except Exception as e:
+                    print(f"Failed to reload saved Lensfun DB: {e}")
+            
+            # Restore all other parameters
+            self.right_panel.set_params(params)
     
     def create_settings_interface(self):
         """Create settings interface with language selection"""
@@ -1631,9 +1739,13 @@ class MainWindow(FluentWindow):
     # --- Actions ---
 
     def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, tr('select_folder'))
+        # Use last folder path as starting directory, or home directory as fallback
+        start_dir = self.last_folder_path if self.last_folder_path and os.path.exists(self.last_folder_path) else ""
+        
+        folder = QFileDialog.getExistingDirectory(self, tr('select_folder'), start_dir)
         if folder:
             self.current_folder = folder
+            self.last_folder_path = folder  # Remember this path
             self.gallery_list.clear()
             self.start_thumbnail_scan(folder)
 
@@ -2037,15 +2149,29 @@ class MainWindow(FluentWindow):
         # Remove the RAW extension from the default filename to avoid "123.RW2.jpg"
         base_name_without_ext = os.path.splitext(os.path.basename(self.current_raw_path))[0]
         
+        # Use last export path, or fall back to gallery folder
+        start_dir = ""
+        if self.last_export_path and os.path.exists(self.last_export_path):
+            start_dir = self.last_export_path
+        elif self.last_folder_path and os.path.exists(self.last_folder_path):
+            start_dir = self.last_folder_path
+        
+        if start_dir:
+            default_path = os.path.join(start_dir, base_name_without_ext)
+        else:
+            default_path = base_name_without_ext
+        
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
             tr('export_image'),
-            base_name_without_ext,  # Use filename without extension, Qt will add the selected format extension
+            default_path,
             "JPEG (*.jpg);;HEIF (*.heif);;TIFF (*.tif)"
         )
         
         # Check if user clicked OK and provided a valid path
         if path and len(path.strip()) > 0:
+            # Remember the export directory
+            self.last_export_path = os.path.dirname(path)
             # 显示保存中通知
             self.saving_infobar = InfoBar.info(
                 tr('saving'),
@@ -2076,9 +2202,18 @@ class MainWindow(FluentWindow):
         
         if not ok:
             return
-             
-        folder = QFileDialog.getExistingDirectory(self, tr('select_export_folder'))
+        
+        # Use last export path, or fall back to gallery folder
+        start_dir = ""
+        if self.last_export_path and os.path.exists(self.last_export_path):
+            start_dir = self.last_export_path
+        elif self.last_folder_path and os.path.exists(self.last_folder_path):
+            start_dir = self.last_folder_path
+        
+        folder = QFileDialog.getExistingDirectory(self, tr('select_export_folder'), start_dir)
         if folder:
+             # Remember the export directory
+             self.last_export_path = folder
              # Batch export marked files
              self.batch_export_list = list(self.marked_files)
              self.batch_export_folder = folder
@@ -2227,6 +2362,11 @@ class MainWindow(FluentWindow):
             display_pixmap = self.current.get_display(self.preview_lbl.size())
             if display_pixmap:
                 self.preview_lbl.setPixmap(display_pixmap)
+    
+    def closeEvent(self, event):
+        """Save settings when closing the application"""
+        self.save_settings()
+        super().closeEvent(event)
 
 
 def launch_gui():

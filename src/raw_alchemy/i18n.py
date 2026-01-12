@@ -65,6 +65,32 @@ class Translator:
                 json.dump(config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"Failed to save language config: {e}")
+    
+    def load_app_settings(self):
+        """Load application settings from config file"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('app_settings', {})
+        except Exception as e:
+            print(f"Failed to load app settings: {e}")
+        return {}
+    
+    def save_app_settings(self, settings):
+        """Save application settings to config file"""
+        try:
+            config = {}
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            
+            config['app_settings'] = settings
+            
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Failed to save app settings: {e}")
 
 _translator = Translator()
 
@@ -76,3 +102,11 @@ def set_language(lang):
 
 def get_current_language():
     return _translator.current_lang
+
+def load_app_settings():
+    """Load application settings"""
+    return _translator.load_app_settings()
+
+def save_app_settings(settings):
+    """Save application settings"""
+    _translator.save_app_settings(settings)
