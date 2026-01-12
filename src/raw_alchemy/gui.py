@@ -1093,6 +1093,9 @@ class MainWindow(FluentWindow):
         
         # Load saved settings
         self.load_settings()
+        
+        # Restore UI state from saved settings
+        self.restore_ui()
     
     def update_window_title(self):
         """更新窗口标题以显示当前文件名"""
@@ -1167,13 +1170,13 @@ class MainWindow(FluentWindow):
         # Restore export path
         if 'last_export_path' in settings:
             self.last_export_path = settings['last_export_path']
-        
-        # Restore inspector panel settings (Log, LUT, lens correction, etc.)
-        if 'inspector_params' in settings:
-            # Will be applied after UI is created
-            self.saved_inspector_params = settings['inspector_params']
-        else:
-            self.saved_inspector_params = None
+    
+    def restore_ui(self):
+        """Restore UI state from saved settings"""
+        # Restore LUT folder and refresh list if saved
+        if self.last_lut_folder_path and os.path.exists(self.last_lut_folder_path):
+            self.right_panel.lut_folder = self.last_lut_folder_path
+            self.right_panel.refresh_lut_list()
     
     def save_settings(self):
         """Save current application settings"""
@@ -1198,8 +1201,7 @@ class MainWindow(FluentWindow):
             'last_folder_path': self.current_folder,
             'last_lut_folder_path': self.last_lut_folder_path,
             'last_lensfun_db_path': self.last_lensfun_db_path,
-            'last_export_path': self.last_export_path,
-            'inspector_params': self.right_panel.get_params()
+            'last_export_path': self.last_export_path
         }
         i18n.save_app_settings(settings)
 
@@ -1340,31 +1342,6 @@ class MainWindow(FluentWindow):
 
         # Install event filter to capture keys globally
         QApplication.instance().installEventFilter(self)
-        
-        # Restore saved inspector settings after UI is created
-        if hasattr(self, 'saved_inspector_params') and self.saved_inspector_params:
-            QTimer.singleShot(200, lambda: self._restore_inspector_settings())
-    
-    def _restore_inspector_settings(self):
-        """Restore saved inspector panel settings"""
-        if hasattr(self, 'saved_inspector_params') and self.saved_inspector_params:
-            params = self.saved_inspector_params
-            
-            # Restore LUT folder if saved
-            if self.last_lut_folder_path and os.path.exists(self.last_lut_folder_path):
-                self.right_panel.lut_folder = self.last_lut_folder_path
-                self.right_panel.refresh_lut_list()
-            
-            # Restore Lensfun DB path if saved
-            if self.last_lensfun_db_path and os.path.exists(self.last_lensfun_db_path):
-                self.right_panel.db_path_edit.setText(self.last_lensfun_db_path)
-                try:
-                    lensfun_wrapper.reload_lensfun_database(custom_db_path=self.last_lensfun_db_path, logger=print)
-                except Exception as e:
-                    print(f"Failed to reload saved Lensfun DB: {e}")
-            
-            # Restore all other parameters
-            self.right_panel.set_params(params)
     
     def create_settings_interface(self):
         """Create settings interface with language selection"""
