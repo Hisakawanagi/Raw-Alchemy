@@ -126,17 +126,43 @@ class ThumbnailWorker(QThread):
         """静态方法用于线程池并行处理"""
         try:
             with rawpy.imread(full_path) as raw:
+                image = None
+                from_raw_data = False  # 标记是否从 RAW 数据生成
+                
+                # 尝试提取嵌入的缩略图
                 try:
                     thumb = raw.extract_thumb()
+                    if thumb and thumb.format == rawpy.ThumbFormat.JPEG:
+                        image = QImage()
+                        image.loadFromData(thumb.data)
+                        if image.isNull():
+                            image = None
                 except rawpy.LibRawNoThumbnailError:
-                    return None, None
+                    # 没有嵌入缩略图，稍后从 RAW 数据生成
+                    image = None
                 
-                if thumb and thumb.format == rawpy.ThumbFormat.JPEG:
-                    image = QImage()
-                    image.loadFromData(thumb.data)
+                # 如果没有嵌入缩略图，从 RAW 数据生成
+                if image is None:
+                    from_raw_data = True
+                    # 使用快速解码生成缩略图
+                    # postprocess() 默认会自动应用 EXIF 旋转，所以不需要手动旋转
+                    rgb = raw.postprocess(
+                        gamma=(1, 1),
+                        no_auto_bright=True,
+                        use_camera_wb=True,
+                        output_bps=8,
+                        half_size=True,  # 使用半尺寸加速
+                        demosaic_algorithm=rawpy.DemosaicAlgorithm.LINEAR  # 使用最快的算法
+                    )
                     
-                    if not image.isNull():
-                        # Handle rotation based on flip value
+                    # 转换为 QImage
+                    h, w, c = rgb.shape
+                    bytes_per_line = w * 3
+                    image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
+                
+                if not image.isNull():
+                    # 只对嵌入缩略图应用旋转，从 RAW 数据生成的已经自动旋转了
+                    if not from_raw_data:
                         orientation = raw.sizes.flip
                         if orientation == 3:
                             image = image.transformed(QTransform().rotate(180))
@@ -144,13 +170,15 @@ class ThumbnailWorker(QThread):
                             image = image.transformed(QTransform().rotate(-90))
                         elif orientation == 6:
                             image = image.transformed(QTransform().rotate(90))
-                        
-                        # 使用FastTransformation提速 - 缩略图不需要高质量
-                        scaled = image.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio,
-                                            Qt.TransformationMode.FastTransformation)
-                        return full_path, scaled
+                    
+                    # 使用FastTransformation提速 - 缩略图不需要高质量
+                    scaled = image.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                                        Qt.TransformationMode.FastTransformation)
+                    return full_path, scaled
         except Exception as e:
             print(f"Error generating thumb for {os.path.basename(full_path)}: {e}")
+            import traceback
+            traceback.print_exc()
         
         return None, None
 
