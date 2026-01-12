@@ -991,7 +991,8 @@ class InspectorPanel(ScrollArea):
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Raw Alchemy Studio")
+        self.base_title = "Raw Alchemy Studio"
+        self.setWindowTitle(self.base_title)
         self.setWindowIcon(QIcon(self._get_icon_path()))
         self.resize(1900, 1200)
         
@@ -1035,6 +1036,14 @@ class MainWindow(FluentWindow):
         self.update_timer.setSingleShot(True)
         self.update_timer.setInterval(100) # 100ms debounce
         self.update_timer.timeout.connect(self.trigger_processing)
+    
+    def update_window_title(self):
+        """更新窗口标题以显示当前文件名"""
+        if self.current_raw_path:
+            filename = os.path.basename(self.current_raw_path)
+            self.setWindowTitle(f"{self.base_title} - {filename}")
+        else:
+            self.setWindowTitle(self.base_title)
     
     def _get_icon_path(self):
         """Get the path to the application icon."""
@@ -1562,6 +1571,9 @@ class MainWindow(FluentWindow):
         # Switch path
         self.current_raw_path = path
         
+        # Update window title with current filename
+        self.update_window_title()
+        
         # Clear images for new selection
         self.original.clear()
         self.current.clear()
@@ -1852,6 +1864,8 @@ class MainWindow(FluentWindow):
                     # No more images
                     self.current_raw_path = None
                     self.preview_lbl.setText(tr('no_image_selected'))
+                    # Update window title when no image is selected
+                    self.update_window_title()
                 
                 InfoBar.success(tr('delete_image'), tr('delete_image'), parent=self)
                 
