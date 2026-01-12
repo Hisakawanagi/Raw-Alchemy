@@ -1161,13 +1161,19 @@ class MainWindow(FluentWindow):
         """Load saved application settings"""
         settings = i18n.load_app_settings()
         
-        # Restore last folder path
+        # Restore window geometry and state
+        if 'window_geometry' in settings:
+            geom = settings['window_geometry']
+            if all(k in geom for k in ['x', 'y', 'width', 'height']):
+                self.setGeometry(geom['x'], geom['y'], geom['width'], geom['height'])
+        
+        # Restore maximized state
+        if settings.get('window_maximized', False):
+            self.showMaximized()
+        
+        # Restore last folder path (but don't auto-open)
         if 'last_folder_path' in settings:
             self.last_folder_path = settings['last_folder_path']
-            # Auto-open last folder if it still exists
-            if self.last_folder_path and os.path.exists(self.last_folder_path):
-                # Delay opening to ensure UI is ready
-                QTimer.singleShot(100, lambda: self._auto_open_folder(self.last_folder_path))
         
         # Restore LUT folder
         if 'last_lut_folder_path' in settings:
@@ -1188,15 +1194,26 @@ class MainWindow(FluentWindow):
         else:
             self.saved_inspector_params = None
     
-    def _auto_open_folder(self, folder_path):
-        """Auto-open last used folder"""
-        if folder_path and os.path.exists(folder_path):
-            self.current_folder = folder_path
-            self.start_thumbnail_scan(folder_path)
-    
     def save_settings(self):
         """Save current application settings"""
+        # Save window geometry and maximized state
+        is_maximized = self.isMaximized()
+        
+        # Get geometry (if not maximized, save current geometry; if maximized, save normal geometry)
+        if is_maximized:
+            # Get the normal geometry (before maximization)
+            geom = self.normalGeometry()
+        else:
+            geom = self.geometry()
+        
         settings = {
+            'window_geometry': {
+                'x': geom.x(),
+                'y': geom.y(),
+                'width': geom.width(),
+                'height': geom.height()
+            },
+            'window_maximized': is_maximized,
             'last_folder_path': self.current_folder,
             'last_lut_folder_path': self.last_lut_folder_path,
             'last_lensfun_db_path': self.last_lensfun_db_path,
