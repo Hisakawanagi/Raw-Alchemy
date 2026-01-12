@@ -7,7 +7,6 @@ import numpy as np
 import rawpy
 import colour
 import gc
-import tomllib
 import urllib.request
 import json
 from typing import Optional, Dict
@@ -40,35 +39,17 @@ from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
 # ==============================================================================
 
 def get_version_info():
-    """Read version and license from pyproject.toml"""
-    try:
-        # Get the project root directory (parent of src)
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(current_dir))
-        pyproject_path = os.path.join(project_root, 'pyproject.toml')
-        
-        if os.path.exists(pyproject_path):
-            with open(pyproject_path, 'rb') as f:
-                data = tomllib.load(f)
-                version = data.get('project', {}).get('version', '0.0.0')
-                # Extract license from classifiers
-                classifiers = data.get('project', {}).get('classifiers', [])
-                license_info = 'AGPL-3.0'  # Default
-                for classifier in classifiers:
-                    if 'License ::' in classifier:
-                        # Extract license name from classifier
-                        license_name = classifier.split('::')[-1].strip()
-                        # Simplify AGPL license name
-                        if 'Affero' in license_name or 'AGPL' in classifier:
-                            license_info = 'AGPL-3.0'
-                        else:
-                            license_info = license_name
-                        break
-                return version, license_info
-    except Exception as e:
-        print(f"Warning: Could not read version info: {e}")
+    """Read version and license from __init__.py"""
+    version = '0.0.0'
+    license_info = 'AGPL-3.0'
     
-    return '0.0.0', 'AGPL-3.0'
+    try:
+        from raw_alchemy import __version__
+        version = __version__
+    except (ImportError, AttributeError):
+        print("Warning: Could not read version from __init__.py")
+    
+    return version, license_info
 
 # ==============================================================================
 #                               Data Structures
