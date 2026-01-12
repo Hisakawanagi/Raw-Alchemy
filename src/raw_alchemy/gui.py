@@ -991,7 +991,7 @@ class InspectorPanel(ScrollArea):
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Raw Alchemy")
+        self.setWindowTitle("Raw Alchemy Studio")
         self.setWindowIcon(QIcon(self._get_icon_path()))
         self.resize(1900, 1200)
         
@@ -1044,10 +1044,17 @@ class MainWindow(FluentWindow):
         except Exception:
             base_path = os.path.abspath(".")
         
-        icon_path = os.path.join(base_path, "icon.png")
-        if not os.path.exists(icon_path):
-            # Fallback for development environment if running from src
+        # Windows 优先使用 .ico 格式，其他平台使用 .png
+        if sys.platform == 'win32':
             icon_path = os.path.join(base_path, "icon.ico")
+            if not os.path.exists(icon_path):
+                # Fallback to PNG if ICO not found
+                icon_path = os.path.join(base_path, "icon.png")
+        else:
+            icon_path = os.path.join(base_path, "icon.png")
+            if not os.path.exists(icon_path):
+                # Fallback to ICO if PNG not found
+                icon_path = os.path.join(base_path, "icon.ico")
             
         return icon_path
 

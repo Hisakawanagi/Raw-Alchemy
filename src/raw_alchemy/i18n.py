@@ -1,6 +1,7 @@
 
 import os
 import json
+from raw_alchemy.utils import resource_path
 
 class Translator:
     def __init__(self):
@@ -11,9 +12,8 @@ class Translator:
 
     def _load_translations(self):
         """Load translations from JSON files"""
-        # Get the directory where this file is located
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        locales_dir = os.path.join(current_dir, 'locales')
+        # Use resource_path to handle both dev and PyInstaller environments
+        locales_dir = resource_path('locales')
         
         # Load each language file
         for lang_code in ['en', 'zh']:
