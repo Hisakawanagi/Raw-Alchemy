@@ -150,6 +150,7 @@ class ThumbnailWorker(QThread):
                         gamma=(1, 1),
                         no_auto_bright=True,
                         use_camera_wb=True,
+                        use_auto_wb=False,
                         output_bps=8,
                         half_size=True,  # 使用半尺寸加速
                         demosaic_algorithm=rawpy.DemosaicAlgorithm.LINEAR  # 使用最快的算法
@@ -379,6 +380,7 @@ class ImageProcessor(QThread):
                 gamma=(1, 1),
                 no_auto_bright=True,
                 use_camera_wb=True,
+                use_auto_wb=False,
                 output_bps=16,
                 output_color=rawpy.ColorSpace.ProPhoto,
                 bright=1.0,
@@ -496,9 +498,9 @@ class ImageProcessor(QThread):
             except:
                 pass
         
-        # Display transform
+        # Display transform - sRGB Standard
         if not log_space or log_space == 'None':
-            utils.bt709_to_srgb_inplace(img)
+            utils.linear_to_srgb_inplace(img)
         
         img = np.clip(img, 0, 1)
         img_float = img.copy()

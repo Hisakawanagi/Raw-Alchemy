@@ -53,6 +53,7 @@ def process_image(
             gamma=(1, 1),
             no_auto_bright=True,
             use_camera_wb=True,
+            use_auto_wb=False,
             output_bps=16,
             output_color=rawpy.ColorSpace.ProPhoto,
             bright=1.0,
@@ -106,7 +107,7 @@ def process_image(
     logger.info(f"  🔹 [Step 3.4] Saturation/Contrast (S:{saturation:.2f}, C:{contrast:.2f})...")
     img = utils.apply_saturation_and_contrast(img, saturation=saturation, contrast=contrast, colourspace=source_cs)
 
-    # --- Step 4: 色彩空间转换 (ProPhoto Linear -> Log) ---
+    # --- Step 4: 色彩空间转换 (ProPhoto Linear -> Log 或 sRGB Standard) ---
     if log_space and log_space != 'None':
         log_color_space_name = LOG_TO_WORKING_SPACE.get(log_space)
         log_curve_name = LOG_ENCODING_MAP.get(log_space, log_space)
@@ -132,7 +133,11 @@ def process_image(
         np.maximum(img, 1e-6, out=img)
         img = colour.cctf_encoding(img, function=log_curve_name)
     else:
-        logger.info("  🔹 [Step 4] Skipping Color Transform (Log Space is None)")
+        logger.info("  🔹 [Step 4] Applying sRGB Standard Transform (Linear -> sRGB)")
+        # 应用 sRGB 标准转换：线性 RGB -> sRGB 编码
+        if not img.flags['C_CONTIGUOUS']:
+            img = np.ascontiguousarray(img)
+        utils.linear_to_srgb_inplace(img)
 
     # --- Step 5: 应用 LUT ---
     if lut_path:
