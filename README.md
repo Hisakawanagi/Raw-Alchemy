@@ -194,3 +194,20 @@ RawAlchemy-v0.1.0-windows.exe [OPTIONS] <INPUT_RAW_PATH> <OUTPUT_PATH>
 -   `Arri LogC4`
 -   `Log3G10`
 -   `D-Log`
+
+---
+
+## ☕ Buy me a coffee
+
+If **Raw Alchemy** saved your time, consider buying me a coffee to keep the code flowing. ☕
+
+<details>
+<summary><strong>👉 Click to expand (WeChat/Alipay)</strong></summary>
+
+<br>
+<div align="center">
+  <img src="Samples/sponsor.png" width="300px">
+  <p><sub>Thank you for your support!</sub></p>
+</div>
+
+</details>
