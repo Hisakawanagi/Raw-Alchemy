@@ -409,8 +409,8 @@ class ImageProcessor(QThread):
 
     def _do_process(self, request: ProcessRequest):
         """Process image with parameters"""
-        # Ensure image is loaded
-        if self.cached_linear is None:
+        # Ensure image is loaded and matches request path
+        if self.cached_linear is None or self.current_path != request.path:
             # Need to load first
             self._do_load(ProcessRequest(request.path, {'_load': True}, request.request_id))
             if self.cached_linear is None:
