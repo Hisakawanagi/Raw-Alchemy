@@ -9,17 +9,17 @@ from numba import njit, prange
 
 def resource_path(relative_path):
     """
-    Get absolute path to resource, works for dev and for PyInstaller.
-    Handles running as a script and as a frozen PyInstaller executable.
+    Get absolute path to resource, works for dev, PyInstaller, and Nuitka.
+    Handles running as a script and as a frozen executable (PyInstaller or Nuitka).
     """
-    # Check if running in a PyInstaller bundle (one-file or one-dir)
+    # Check if running in a PyInstaller or Nuitka bundle
     if getattr(sys, 'frozen', False):
-        # For one-file mode, the path is in the temporary _MEIPASS directory.
+        # For onefile mode, the path is in the temporary _MEIPASS directory.
         if hasattr(sys, '_MEIPASS'):
             base_path = sys._MEIPASS
         else:
-            # For one-dir mode, data is in an '_internal' folder next to the executable.
-            base_path = os.path.join(os.path.dirname(sys.executable), '_internal')
+            # For standalone mode, resources are next to executable
+            base_path = os.path.dirname(sys.executable)
     else:
         # Running as a normal script - use the directory of this file
         base_path = os.path.dirname(os.path.abspath(__file__))
