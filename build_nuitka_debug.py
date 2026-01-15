@@ -27,6 +27,7 @@ def get_nuitka_command():
     cmd = [
         sys.executable,
         "-m", "nuitka",
+        "--mingw64",
         "--standalone",  # 独立模式
         # 注意：使用 onedir 而不是 onefile，速度快很多
         
@@ -39,7 +40,7 @@ def get_nuitka_command():
         
         # 优化选项 - 为速度优化
         "--lto=no",   # 禁用 LTO 以加快编译
-        "--jobs=20",   # 减少并行任务数
+        "--jobs=32",   # 减少并行任务数
         
         # Python 标志
         "--python-flag=no_site",
