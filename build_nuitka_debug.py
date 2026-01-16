@@ -48,18 +48,20 @@ def get_nuitka_command():
         # 包含必要的包
         "--include-package=numpy",
         "--include-package=numba",
+        "--include-module=raw_alchemy.math_ops_ext",
         "--include-package=rawpy",
         "--include-package=colour",
         "--include-package=scipy",
         "--include-package=PIL",
         "--include-package=pillow_heif",
-        "--include-package=PyQt6",
+        "--include-package=PySide6",
         "--include-package=qfluentwidgets",
         "--include-package=send2trash",
         
         # 排除不需要的模块
         "--nofollow-import-to=pandas",
         "--nofollow-import-to=IPython",
+        "--nofollow-import-to=PyQt6",
         "--nofollow-import-to=PyQt5",
         "--nofollow-import-to=PySide2",
         "--nofollow-import-to=test",
@@ -67,13 +69,13 @@ def get_nuitka_command():
         "--nofollow-import-to=setuptools",
         
         # 包含数据文件
-        "--include-data-dir=src/raw_alchemy/vendor=vendor",
-        "--include-data-dir=src/raw_alchemy/locales=locales",
+        "--include-data-dir=src/raw_alchemy/vendor=raw_alchemy/vendor",
+        "--include-data-dir=src/raw_alchemy/locales=raw_alchemy/locales",
         "--include-data-files=icon.ico=icon.ico",
         "--include-data-files=icon.png=icon.png",
         
-        # PyQt6 插件支持
-        "--enable-plugin=pyqt6",
+        # PySide6 插件支持
+        "--enable-plugin=pyside6",
         
         # 警告控制
         "--assume-yes-for-downloads",
@@ -97,7 +99,7 @@ def get_nuitka_command():
         cmd.extend([
             "--macos-create-app-bundle",
             "--macos-app-icon=icon.icns",
-            "--macos-app-name=RawAlchemy-Fast",
+            "--macos-app-name=RawAlchemy-Debug",
         ])
     elif system == "Linux":
         cmd.extend([
@@ -122,7 +124,7 @@ def check_dependencies():
         return False
     
     # 检查其他依赖
-    required = ['numpy', 'numba', 'rawpy', 'colour', 'PyQt6', 'qfluentwidgets']
+    required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6', 'qfluentwidgets']
     missing = []
     for pkg in required:
         try:
@@ -176,9 +178,9 @@ def main():
         print("=" * 60)
         
         if platform.system() == "Windows":
-            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Fast.exe"
+            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Debug.exe"
         else:
-            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Fast"
+            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Debug"
         
         print(f"\n可执行文件位置: {exe_path}")
         print("\n⚠️  这是快速构建版本，用于测试。")

@@ -490,13 +490,27 @@ class ImageProcessor(QThread):
                         img = np.ascontiguousarray(img)
                     if img.dtype != np.float32:
                         img = img.astype(np.float32)
-                    if lut.table.dtype != np.float32:
-                        lut.table = lut.table.astype(np.float32)
-                    utils.apply_lut_inplace(img, lut.table, lut.domain[0], lut.domain[1])
+                    
+                    # Ensure LUT table is float32 and C-contiguous
+                    lut_table = lut.table
+                    if lut_table.dtype != np.float32:
+                        lut_table = lut_table.astype(np.float32)
+                    if not lut_table.flags['C_CONTIGUOUS']:
+                        lut_table = np.ascontiguousarray(lut_table)
+                        
+                    # Ensure domains are float64 and C-contiguous
+                    domain_min = lut.domain[0].astype(np.float64)
+                    domain_max = lut.domain[1].astype(np.float64)
+                    if not domain_min.flags['C_CONTIGUOUS']:
+                        domain_min = np.ascontiguousarray(domain_min)
+                    if not domain_max.flags['C_CONTIGUOUS']:
+                        domain_max = np.ascontiguousarray(domain_max)
+
+                    utils.apply_lut_inplace(img, lut_table, domain_min, domain_max)
                 else:
                     img = lut.apply(img)
-            except:
-                pass
+            except Exception as e:
+                print(f"LUT application error: {e}")
         
         # Display transform - sRGB Standard
         if not log_space or log_space == 'None':

@@ -44,12 +44,13 @@ def get_nuitka_command():
         # 包含必要的包
         "--include-package=numpy",
         "--include-package=numba",
+        "--include-module=raw_alchemy.math_ops_ext",
         "--include-package=rawpy",
         "--include-package=colour",
         "--include-package=scipy",
         "--include-package=PIL",
         "--include-package=pillow_heif",
-        "--include-package=PyQt6",
+        "--include-package=PySide6",
         "--include-package=qfluentwidgets",
         "--include-package=send2trash",
         
@@ -59,12 +60,14 @@ def get_nuitka_command():
         "--include-data-files=icon.ico=icon.ico",
         "--include-data-files=icon.png=icon.png",
         
-        # PyQt6 插件支持
-        "--enable-plugin=pyqt6",
+        # PySide6 插件支持
+        "--enable-plugin=pyside6",
         
         # 排除不需要的模块以减小体积
+        "--nofollow-import-to=nuitka",
         "--nofollow-import-to=pandas",
         "--nofollow-import-to=IPython",
+        "--nofollow-import-to=PyQt6",
         "--nofollow-import-to=PyQt5",
         "--nofollow-import-to=PySide2",
         "--nofollow-import-to=test",
@@ -118,7 +121,7 @@ def check_dependencies():
         return False
     
     # 检查其他依赖
-    required = ['numpy', 'numba', 'rawpy', 'colour', 'PyQt6', 'qfluentwidgets']
+    required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6', 'qfluentwidgets']
     missing = []
     for pkg in required:
         try:
