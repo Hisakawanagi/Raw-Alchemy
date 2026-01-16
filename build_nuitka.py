@@ -140,19 +140,15 @@ def check_dependencies():
         return False
     
     # 检查其他依赖
-    required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6', 'qfluentwidgets']
+    required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6']
     missing = []
-    import importlib.util
     for pkg in required:
-        if importlib.util.find_spec(pkg) is not None:
+        try:
+            __import__(pkg)
             print(f"[OK] {pkg} found")
-        else:
-            try:
-                __import__(pkg)
-                print(f"[OK] {pkg} found")
-            except ImportError:
-                missing.append(pkg)
-                print(f"[MISSING] {pkg} not found")
+        except ImportError:
+            missing.append(pkg)
+            print(f"[MISSING] {pkg} not found")
     
     if missing:
         print(f"\nMissing packages: {', '.join(missing)}")
