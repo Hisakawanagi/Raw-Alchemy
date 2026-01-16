@@ -59,6 +59,7 @@ def get_nuitka_command():
         "--include-package=send2trash",
         
         # 排除不需要的模块
+        "--nofollow-import-to=nuitka",
         "--nofollow-import-to=pandas",
         "--nofollow-import-to=IPython",
         "--nofollow-import-to=PyQt6",
