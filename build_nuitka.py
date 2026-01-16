@@ -18,6 +18,7 @@ def get_nuitka_command():
     """Generate Nuitka build command based on platform"""
     
     system = platform.system()
+    extra_args = sys.argv[1:]
     
     # Base command
     cmd = [
@@ -55,8 +56,9 @@ def get_nuitka_command():
         "--include-package=send2trash",
         
         # 包含数据文件
-        "--include-data-dir=src/raw_alchemy/vendor=vendor",
-        "--include-data-dir=src/raw_alchemy/locales=locales",
+        # 注意：我们需要保持包结构，所以映射到 raw_alchemy/vendor
+        "--include-data-dir=src/raw_alchemy/vendor=raw_alchemy/vendor",
+        "--include-data-dir=src/raw_alchemy/locales=raw_alchemy/locales",
         "--include-data-files=icon.ico=icon.ico",
         "--include-data-files=icon.png=icon.png",
         
@@ -80,6 +82,23 @@ def get_nuitka_command():
         "--warn-unusual-code",
     ]
     
+    # 强制包含 vendor 中的 DLL (Nuitka 默认可能会在 data-dir 中过滤掉 DLL)
+    vendor_dir = os.path.join("src", "raw_alchemy", "vendor")
+    if os.path.exists(vendor_dir):
+        print(f"Scanning for DLLs in {vendor_dir}...")
+        for root, _, files in os.walk(vendor_dir):
+            for file in files:
+                if file.lower().endswith(('.dll', '.so', '.dylib')):
+                    src_path = os.path.join(root, file)
+                    # 计算相对路径: src/raw_alchemy/vendor/... -> raw_alchemy/vendor/...
+                    # 我们希望它在 dist 中的位置与源码结构一致
+                    rel_path = os.path.relpath(src_path, "src")
+                    print(f"  + Force including DLL: {src_path} -> {rel_path}")
+                    cmd.append(f"--include-data-files={src_path}={rel_path}")
+
+    # 添加命令行传入的额外参数
+    cmd.extend(extra_args)
+
     # 平台特定设置
     if system == "Windows":
         cmd.extend([

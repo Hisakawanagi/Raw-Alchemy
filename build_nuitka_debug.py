@@ -86,6 +86,20 @@ def get_nuitka_command():
         "--show-memory",
     ]
     
+    # 强制包含 vendor 中的 DLL (Nuitka 默认可能会在 data-dir 中过滤掉 DLL)
+    vendor_dir = os.path.join("src", "raw_alchemy", "vendor")
+    if os.path.exists(vendor_dir):
+        print(f"Scanning for DLLs in {vendor_dir}...")
+        for root, _, files in os.walk(vendor_dir):
+            for file in files:
+                if file.lower().endswith(('.dll', '.so', '.dylib')):
+                    src_path = os.path.join(root, file)
+                    # 计算相对路径: src/raw_alchemy/vendor/... -> raw_alchemy/vendor/...
+                    # 我们希望它在 dist 中的位置与源码结构一致
+                    rel_path = os.path.relpath(src_path, "src")
+                    print(f"  + Force including DLL: {src_path} -> {rel_path}")
+                    cmd.append(f"--include-data-files={src_path}={rel_path}")
+
     # 平台特定设置
     if system == "Windows":
         cmd.extend([
