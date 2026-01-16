@@ -141,13 +141,17 @@ def check_dependencies():
     # 检查其他依赖
     required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6', 'qfluentwidgets']
     missing = []
+    import importlib.util
     for pkg in required:
-        try:
-            __import__(pkg)
+        if importlib.util.find_spec(pkg) is not None:
             print(f"[OK] {pkg} found")
-        except ImportError:
-            missing.append(pkg)
-            print(f"[MISSING] {pkg} not found")
+        else:
+            try:
+                __import__(pkg)
+                print(f"[OK] {pkg} found")
+            except ImportError:
+                missing.append(pkg)
+                print(f"[MISSING] {pkg} not found")
     
     if missing:
         print(f"\nMissing packages: {', '.join(missing)}")
@@ -161,11 +165,11 @@ def main():
     print("Raw Alchemy Studio - Nuitka FAST Build Script")
     print("=" * 60)
     print()
-    print("[FAST] 快速构建模式:")
-    print("  - 使用 onedir 模式（输出为文件夹）")
-    print("  - 禁用 LTO 优化")
-    print("  - 启用控制台窗口")
-    print("  - 编译时间约为正式版本的 50-70%")
+    print("[FAST] Fast Build Mode:")
+    print("  - Use onedir mode (output as folder)")
+    print("  - Disable LTO optimization")
+    print("  - Enable console window")
+    print("  - Compile time approx 50-70% of release version")
     print()
     
     # 检查依赖
@@ -197,9 +201,9 @@ def main():
         else:
             exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Debug"
         
-        print(f"\n可执行文件位置: {exe_path}")
-        print("\n⚠️  这是快速构建版本，用于测试。")
-        print("    正式发布请使用: python build_nuitka.py")
+        print(f"\nExecutable location: {exe_path}")
+        print("\n[WARN] This is a fast build version for testing.")
+        print("       For official release use: python build_nuitka.py")
     except subprocess.CalledProcessError as e:
         print("\n" + "=" * 60)
         print("[ERROR] Build failed!")
