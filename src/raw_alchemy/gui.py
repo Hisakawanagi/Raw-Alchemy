@@ -13,14 +13,14 @@ from typing import Optional, Dict
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QFileDialog, QListWidget, QListWidgetItem, QFrame,
     QSplitter, QSizePolicy, QGraphicsDropShadowEffect, QGridLayout,
     QInputDialog
 )
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QObject, QTimer, QEvent
-from PyQt6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QResizeEvent, QTransform
+from PySide6.QtCore import Qt, QSize, QThread, Signal, QObject, QTimer, QEvent
+from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QResizeEvent, QTransform
 
 from qfluentwidgets import (
     FluentWindow, SubtitleLabel, PrimaryPushButton, PushButton,
@@ -111,9 +111,9 @@ class ProcessRequest:
 
 class ThumbnailWorker(QThread):
     """Scan folder and generate thumbnails - 优化版本使用线程池"""
-    thumbnail_ready = pyqtSignal(str, QImage)
-    progress_update = pyqtSignal(int, int)  # current, total
-    finished_scanning = pyqtSignal()
+    thumbnail_ready = Signal(str, QImage)
+    progress_update = Signal(int, int)  # current, total
+    finished_scanning = Signal()
 
     def __init__(self, folder_path, max_workers=4):
         super().__init__()
@@ -252,7 +252,7 @@ class ThumbnailWorker(QThread):
 
 class VersionCheckWorker(QThread):
     """Check for new version from GitHub releases"""
-    version_checked = pyqtSignal(bool, str, str)  # success, latest_version, error_msg
+    version_checked = Signal(bool, str, str)  # success, latest_version, error_msg
     
     def __init__(self, current_version):
         super().__init__()
@@ -293,9 +293,9 @@ class ImageProcessor(QThread):
     Image processing worker. Uses request queue pattern to eliminate race conditions.
     No more params_dirty, no more mode/running_mode confusion.
     """
-    result_ready = pyqtSignal(np.ndarray, np.ndarray, str, int, float)  # img_uint8, img_float, path, request_id, applied_ev
-    load_complete = pyqtSignal(str, int)  # path, request_id - signals RAW loading is done
-    error_occurred = pyqtSignal(str)
+    result_ready = Signal(np.ndarray, np.ndarray, str, int, float)  # img_uint8, img_float, path, request_id, applied_ev
+    load_complete = Signal(str, int)  # path, request_id - signals RAW loading is done
+    error_occurred = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -581,8 +581,8 @@ class HistogramWidget(QWidget):
             bin_w = w / len(hist)
             
             # Draw bars (or polygon)
-            from PyQt6.QtGui import QPolygonF
-            from PyQt6.QtCore import QPointF
+            from PySide6.QtGui import QPolygonF
+            from PySide6.QtCore import QPointF
             
             points = [QPointF(0, h)]
             for j, val in enumerate(hist):
@@ -625,7 +625,7 @@ class GalleryItem(QWidget):
 
 class InspectorPanel(ScrollArea):
     """Right side control panel"""
-    param_changed = pyqtSignal(dict)
+    param_changed = Signal(dict)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1649,7 +1649,7 @@ class MainWindow(FluentWindow):
             
             if latest > current:
                 # New version available - show dialog
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 reply = QMessageBox.question(
                     self,
                     tr('update_available'),
@@ -1675,7 +1675,7 @@ class MainWindow(FluentWindow):
         except Exception as e:
             # Fallback: simple string comparison
             if latest_version != self.current_version:
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 reply = QMessageBox.question(
                     self,
                     tr('update_available'),
@@ -1706,7 +1706,7 @@ class MainWindow(FluentWindow):
         i18n.set_language(lang_code)
         
         # Show restart message
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
         QMessageBox.information(
             self,
             tr('restart_required'),
@@ -2061,7 +2061,7 @@ class MainWindow(FluentWindow):
     def delete_image(self):
         if not self.current_raw_path: return
         
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
         
         # Ask for confirmation
         reply = QMessageBox.question(
@@ -2295,7 +2295,7 @@ class MainWindow(FluentWindow):
         # Using a simple QThread wrapper
         
         class ExportThread(QThread):
-            finished_sig = pyqtSignal(bool, str)
+            finished_sig = Signal(bool, str)
             
             def run(self):
                 try:

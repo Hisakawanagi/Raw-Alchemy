@@ -27,7 +27,7 @@ class Translator:
                     self.translations[lang_code] = {}
             except Exception as e:
                 print(f"Error loading translation file {lang_file}: {e}")
-                self.translations[lang_code] = {}
+                self.translations[lang_code ] = {}
 
     def get(self, key, **kwargs):
         text = self.translations.get(self.current_lang, {}).get(key, key)
