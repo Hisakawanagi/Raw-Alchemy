@@ -132,11 +132,11 @@ def check_dependencies():
             result = subprocess.run([sys.executable, "-m", "nuitka", "--version"],
                                   capture_output=True, text=True, timeout=5)
             version = result.stdout.strip().split('\n')[0] if result.stdout else "installed"
-            print(f"✓ Nuitka: {version}")
+            print(f"[OK] Nuitka: {version}")
         except:
-            print("✓ Nuitka installed")
+            print("[OK] Nuitka installed")
     except ImportError:
-        print("✗ Nuitka not found. Install with: pip install nuitka")
+        print("[ERROR] Nuitka not found. Install with: pip install nuitka")
         return False
     
     # 检查其他依赖
@@ -145,10 +145,10 @@ def check_dependencies():
     for pkg in required:
         try:
             __import__(pkg)
-            print(f"✓ {pkg} found")
+            print(f"[OK] {pkg} found")
         except ImportError:
             missing.append(pkg)
-            print(f"✗ {pkg} not found")
+            print(f"[MISSING] {pkg} not found")
     
     if missing:
         print(f"\nMissing packages: {', '.join(missing)}")
@@ -184,12 +184,12 @@ def main():
     try:
         result = subprocess.run(cmd, check=True)
         print("\n" + "=" * 60)
-        print("✓ Build completed successfully!")
+        print("[OK] Build completed successfully!")
         print("=" * 60)
         print(f"\nExecutable location: dist/RawAlchemy{'.exe' if platform.system() == 'Windows' else ''}")
     except subprocess.CalledProcessError as e:
         print("\n" + "=" * 60)
-        print("✗ Build failed!")
+        print("[ERROR] Build failed!")
         print("=" * 60)
         print(f"\nError: {e}")
         sys.exit(1)
