@@ -1136,11 +1136,17 @@ class MainWindow(FluentWindow):
             self.setWindowTitle(self.base_title)
     
     def _get_icon_path(self):
-        """Get the path to the application icon."""
-        try:
-            # PyInstaller creates a temp folder and stores path in _MEIPASS
-            base_path = sys._MEIPASS
-        except Exception:
+        """Get the path to the application icon (supports PyInstaller and Nuitka)."""
+        # Check if running as frozen executable (PyInstaller or Nuitka)
+        if getattr(sys, 'frozen', False):
+            # For onefile mode, resources are in _MEIPASS
+            if hasattr(sys, '_MEIPASS'):
+                base_path = sys._MEIPASS
+            else:
+                # For standalone mode, resources are next to executable
+                base_path = os.path.dirname(sys.executable)
+        else:
+            # Running as script - use current directory
             base_path = os.path.abspath(".")
         
         # Windows 优先使用 .ico 格式，其他平台使用 .png
