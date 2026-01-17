@@ -36,19 +36,23 @@ def get_nuitka_command():
         
         # 优化选项
         "--lto=yes",  # Link Time Optimization
+        # "--lto={}".format("no" if system == "Darwin" else "yes"),  # macOS 上禁用 LTO 以缩短构建时间
         "--jobs=4",   # 并行编译
         
         # Python 标志
         "--python-flag=no_site",
         "--python-flag=no_warnings",
         
+        # 移除 tkinter 依赖 (除非真的用到)
+        "--nofollow-import-to=tkinter",
+
         # 包含必要的包
         "--include-package=numpy",
         "--include-package=numba",
         "--include-module=raw_alchemy.math_ops_ext",
         "--include-package=rawpy",
         "--include-package=colour",
-        "--include-package=scipy",
+        "--include-package=scipy", # 恢复完整的 SciPy 以解决 'scipy is not a package' 错误
         "--include-package=PIL",
         "--include-package=pillow_heif",
         "--include-package=PySide6",
@@ -73,8 +77,14 @@ def get_nuitka_command():
         "--nofollow-import-to=PyQt5",
         "--nofollow-import-to=PySide2",
         "--nofollow-import-to=test",
+        "--nofollow-import-to=numba.tests",
+        "--nofollow-import-to=colour.utilities.tests", # 排除 colour 的测试代码
+        "--nofollow-import-to=doctest", # 排除 doctest
+        "--nofollow-import-to=PyInstaller", # 排除 PyInstaller 及其相关依赖
         "--nofollow-import-to=distutils",
         "--nofollow-import-to=setuptools",
+        "--nofollow-import-to=matplotlib", # 排除 matplotlib 减少体积
+        "--nofollow-import-to=pycc", # 排除 numba pycc 编译工具
         
         # 警告控制
         "--assume-yes-for-downloads",

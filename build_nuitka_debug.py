@@ -40,7 +40,7 @@ def get_nuitka_command():
         
         # 优化选项 - 为速度优化
         "--lto=no",   # 禁用 LTO 以加快编译
-        "--jobs=32",   # 减少并行任务数
+        "--jobs=4",   # 减少并行任务数
         
         # Python 标志
         "--python-flag=no_site",
@@ -68,6 +68,13 @@ def get_nuitka_command():
         "--nofollow-import-to=test",
         "--nofollow-import-to=distutils",
         "--nofollow-import-to=setuptools",
+        "--nofollow-import-to=tkinter",
+        "--nofollow-import-to=matplotlib",
+        "--nofollow-import-to=numba.tests",
+        "--nofollow-import-to=colour.utilities.tests",
+        "--nofollow-import-to=doctest",
+        "--nofollow-import-to=PyInstaller",
+        "--nofollow-import-to=pycc",
         
         # 包含数据文件
         "--include-data-dir=src/raw_alchemy/vendor=raw_alchemy/vendor",
@@ -82,7 +89,7 @@ def get_nuitka_command():
         "--assume-yes-for-downloads",
         
         # 关键：启用增量编译
-        "--show-progress",
+        "--show-progress", 
         "--show-memory",
     ]
     
