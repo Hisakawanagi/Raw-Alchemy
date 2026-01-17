@@ -36,7 +36,7 @@ def get_nuitka_command():
         
         # 优化选项
         "--lto=yes",  # Link Time Optimization
-        "--jobs=32",   # 并行编译
+        "--jobs=4",   # 并行编译
         
         # Python 标志
         "--python-flag=no_site",
