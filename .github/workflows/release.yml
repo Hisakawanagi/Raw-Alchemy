@@ -84,6 +84,8 @@ jobs:
       - name: Install macOS system dependencies
         run: |
           brew install create-dmg python-tk@3.12 llvm ccache
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> $GITHUB_ENV
+
       - name: Convert PNG to ICNS for macOS icon
         run: |
           mkdir -p icon.iconset
