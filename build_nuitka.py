@@ -35,7 +35,7 @@ def get_nuitka_command():
         "--output-filename=RawAlchemy",
         
         # 优化选项
-        "--lto=yes",  # Link Time Optimization (现在所有平台包括 macOS 都开启，因为我们使用了 LLVM Clang)
+        "--lto={}".format("no" if system == "Darwin" else "yes"),  # macOS 上禁用 LTO 以缩短构建时间
         "--jobs=4",   # 并行编译
         
         # Python 标志
