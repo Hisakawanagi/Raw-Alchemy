@@ -9,6 +9,13 @@ from pathlib import Path
 from setuptools import setup
 from setuptools.command.build_py import build_py
 
+# Add src to path to import math_ops for AOT compilation
+sys.path.append(str(Path(__file__).parent / "src"))
+try:
+    from raw_alchemy.math_ops import cc
+except ImportError:
+    cc = None
+
 
 class CustomBuildPy(build_py):
     """Custom build command to download and set up Lensfun."""
@@ -77,8 +84,15 @@ class CustomBuildPy(build_py):
             sys.exit(1)
 
 
+ext_modules = []
+if cc:
+    ext = cc.distutils_extension()
+    ext.name = "raw_alchemy.math_ops_ext"
+    ext_modules.append(ext)
+
 setup(
     cmdclass={
         "build_py": CustomBuildPy,
-    }
+    },
+    ext_modules=ext_modules,
 )

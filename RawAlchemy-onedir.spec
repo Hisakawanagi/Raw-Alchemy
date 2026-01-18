@@ -38,6 +38,7 @@ a = Analysis(
         'pandas',
         'IPython',
         'PyQt5',
+        'PyQt6',
         'PySide2',
         'qtpy',
         'test',

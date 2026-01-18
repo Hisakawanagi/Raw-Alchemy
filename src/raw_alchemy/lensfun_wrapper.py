@@ -2,36 +2,42 @@
 Lensfun库的Python包装器
 用于镜头畸变、色差和暗角校正
 """
-
-import ctypes
-import numpy as np
-from typing import Optional
-import platform
-import os
 import sys
+import os
+import platform
+import ctypes
+from typing import Optional
+import numpy as np
 
 def _get_base_path():
     """
-    Gets the base path for data files.
-    Handles running as a script and as a frozen PyInstaller executable.
+    获取资源的基础路径。
+    兼容：开发环境、PyInstaller (单文件/文件夹)、Nuitka (单文件/文件夹)。
     """
-    # Check if running in a PyInstaller bundle (one-file or one-dir)
-    if getattr(sys, 'frozen', False):
-        # For one-file mode, the path is in the temporary _MEIPASS directory.
-        if hasattr(sys, '_MEIPASS'):
-            return sys._MEIPASS
-        # For one-dir mode, data is in an '_internal' folder next to the executable.
-        return os.path.join(os.path.dirname(sys.executable), '_internal')
-    else:
-        # Running as a normal script.
-        return os.path.dirname(os.path.abspath(__file__))
+    # 1. 优先处理 PyInstaller One-file 模式
+    if hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
 
-# 根据平台加载正确的库
+    # 2. 处理 PyInstaller One-dir 模式 (检查是否存在 _internal 文件夹)
+    # PyInstaller 6+ 默认将依赖放在 _internal 中
+    executable_dir = os.path.dirname(sys.executable)
+    pyinstaller_internal_path = os.path.join(executable_dir, '_internal')
+    
+    # 只有当处于 frozen 状态 且 _internal 文件夹确实存在时，才使用它
+    if getattr(sys, 'frozen', False) and os.path.isdir(pyinstaller_internal_path):
+        return pyinstaller_internal_path
+
+    # 3. Nuitka (单文件/文件夹) 以及 普通 Python 脚本
+    # Nuitka 会修正 __file__ 指向正确的运行时位置（无论是临时目录还是 dist 目录）
+    return os.path.dirname(os.path.abspath(__file__))
+
+# _load_lensfun_library 不需要大幅修改，但要注意 bin 目录处理
 def _load_lensfun_library():
     """加载lensfun动态库"""
     system = platform.system()
     base_path = _get_base_path()
-    # print(f"base path: {base_path}") # Remove or comment out print to avoid console noise if needed
+    
+    # 确保路径拼接正确
     lensfun_dir = os.path.join(base_path, "vendor", "lensfun")
     lib_dir = os.path.join(lensfun_dir, "lib")
     bin_dir = os.path.join(lensfun_dir, "bin")
@@ -39,32 +45,36 @@ def _load_lensfun_library():
     lib_path = None
     if system == "Windows":
         lib_path = os.path.join(lib_dir, "lensfun.dll")
-        # Add bin directory to DLL search path for dependencies
+        # Windows DLL 加载关键：添加搜索路径
         if os.path.isdir(bin_dir) and hasattr(os, 'add_dll_directory'):
-            os.add_dll_directory(bin_dir)
+            try:
+                os.add_dll_directory(bin_dir)
+            except Exception:
+                pass # 防止路径添加失败影响主流程
+        # 很多时候 DLL 会依赖同目录下的其他 DLL，把 lib_dir 也加进去更保险
+        if os.path.isdir(lib_dir) and hasattr(os, 'add_dll_directory'):
+             try:
+                os.add_dll_directory(lib_dir)
+             except Exception:
+                pass
+                
     elif system == "Darwin":
         lib_path = os.path.join(lib_dir, "liblensfun.dylib")
-    else:  # Linux and other Unix-like
+    else:
         lib_path = os.path.join(lib_dir, "liblensfun.so")
 
     try:
+        # 显式路径加载
         if lib_path and os.path.exists(lib_path):
+            # Windows 下建议使用 LoadLibrary 或添加 path 后加载
             return ctypes.CDLL(lib_path)
         else:
-            # Fallback to system paths if not found in vendor
-            if system == "Windows":
-                return ctypes.CDLL("lensfun.dll")
-            elif system == "Darwin":
-                return ctypes.CDLL("liblensfun.dylib")
-            else:
-                return ctypes.CDLL("liblensfun.so")
+            # 兜底：尝试系统路径
+            name = "lensfun.dll" if system == "Windows" else ("liblensfun.dylib" if system == "Darwin" else "liblensfun.so")
+            return ctypes.CDLL(name)
     except OSError as e:
-        error_message = (
-            f"Failed to load the Lensfun library. Tried path: {lib_path} and system defaults.\n"
-            f"Please ensure Lensfun is installed and its location is in the system's library path.\n"
-            f"Original error: {e}"
-        )
-        raise RuntimeError(error_message) from e
+        # 错误处理保持不变...
+        raise RuntimeError(f"Could not load lensfun from {lib_path}. Error: {e}")
 
 
 # 加载库

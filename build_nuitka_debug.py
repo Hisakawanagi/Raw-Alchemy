@@ -40,7 +40,7 @@ def get_nuitka_command():
         
         # 优化选项 - 为速度优化
         "--lto=no",   # 禁用 LTO 以加快编译
-        "--jobs=32",   # 减少并行任务数
+        "--jobs=4",   # 减少并行任务数
         
         # Python 标志
         "--python-flag=no_site",
@@ -48,41 +48,65 @@ def get_nuitka_command():
         # 包含必要的包
         "--include-package=numpy",
         "--include-package=numba",
+        "--include-module=raw_alchemy.math_ops_ext",
         "--include-package=rawpy",
         "--include-package=colour",
         "--include-package=scipy",
         "--include-package=PIL",
         "--include-package=pillow_heif",
-        "--include-package=PyQt6",
+        "--include-package=PySide6",
         "--include-package=qfluentwidgets",
         "--include-package=send2trash",
         
         # 排除不需要的模块
+        "--nofollow-import-to=nuitka",
         "--nofollow-import-to=pandas",
         "--nofollow-import-to=IPython",
+        "--nofollow-import-to=PyQt6",
         "--nofollow-import-to=PyQt5",
         "--nofollow-import-to=PySide2",
         "--nofollow-import-to=test",
         "--nofollow-import-to=distutils",
         "--nofollow-import-to=setuptools",
+        "--nofollow-import-to=tkinter",
+        "--nofollow-import-to=matplotlib",
+        "--nofollow-import-to=numba.tests",
+        "--nofollow-import-to=colour.utilities.tests",
+        "--nofollow-import-to=doctest",
+        "--nofollow-import-to=PyInstaller",
+        "--nofollow-import-to=pycc",
         
         # 包含数据文件
-        "--include-data-dir=src/raw_alchemy/vendor=vendor",
-        "--include-data-dir=src/raw_alchemy/locales=locales",
+        "--include-data-dir=src/raw_alchemy/vendor=raw_alchemy/vendor",
+        "--include-data-dir=src/raw_alchemy/locales=raw_alchemy/locales",
         "--include-data-files=icon.ico=icon.ico",
         "--include-data-files=icon.png=icon.png",
         
-        # PyQt6 插件支持
-        "--enable-plugin=pyqt6",
+        # PySide6 插件支持
+        "--enable-plugin=pyside6",
         
         # 警告控制
         "--assume-yes-for-downloads",
         
         # 关键：启用增量编译
-        "--show-progress",
+        "--show-progress", 
         "--show-memory",
     ]
     
+    # 强制包含 vendor 中的 DLL (Nuitka 默认可能会在 data-dir 中过滤掉 DLL)
+    vendor_dir = os.path.join("src", "raw_alchemy", "vendor")
+    if os.path.exists(vendor_dir):
+        print(f"Scanning for DLLs in {vendor_dir}...")
+        for root, _, files in os.walk(vendor_dir):
+            for file in files:
+                if file.lower().endswith(('.dll', '.so', '.dylib')):
+                    src_path = os.path.join(root, file)
+                    # 计算相对路径: src/raw_alchemy/vendor/... -> raw_alchemy/vendor/...
+                    # 我们希望它在 dist 中的位置与源码结构一致
+                    rel_path = os.path.relpath(src_path, "src")
+                    print(f"  + Force including DLL: {src_path} -> {rel_path}")
+                    cmd.append(f"--include-data-files={src_path}={rel_path}")
+
     # 平台特定设置
     if system == "Windows":
         cmd.extend([
@@ -97,7 +121,7 @@ def get_nuitka_command():
         cmd.extend([
             "--macos-create-app-bundle",
             "--macos-app-icon=icon.icns",
-            "--macos-app-name=RawAlchemy-Fast",
+            "--macos-app-name=RawAlchemy-Debug",
         ])
     elif system == "Linux":
         cmd.extend([
@@ -114,23 +138,23 @@ def check_dependencies():
             result = subprocess.run([sys.executable, "-m", "nuitka", "--version"],
                                   capture_output=True, text=True, timeout=5)
             version = result.stdout.strip().split('\n')[0] if result.stdout else "installed"
-            print(f"✓ Nuitka: {version}")
+            print(f"[OK] Nuitka: {version}")
         except:
-            print("✓ Nuitka installed")
+            print("[OK] Nuitka installed")
     except ImportError:
-        print("✗ Nuitka not found. Install with: pip install nuitka")
+        print("[ERROR] Nuitka not found. Install with: pip install nuitka")
         return False
     
     # 检查其他依赖
-    required = ['numpy', 'numba', 'rawpy', 'colour', 'PyQt6', 'qfluentwidgets']
+    required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6']
     missing = []
     for pkg in required:
         try:
             __import__(pkg)
-            print(f"✓ {pkg} found")
+            print(f"[OK] {pkg} found")
         except ImportError:
             missing.append(pkg)
-            print(f"✗ {pkg} not found")
+            print(f"[MISSING] {pkg} not found")
     
     if missing:
         print(f"\nMissing packages: {', '.join(missing)}")
@@ -144,11 +168,11 @@ def main():
     print("Raw Alchemy Studio - Nuitka FAST Build Script")
     print("=" * 60)
     print()
-    print("⚡ 快速构建模式:")
-    print("  - 使用 onedir 模式（输出为文件夹）")
-    print("  - 禁用 LTO 优化")
-    print("  - 启用控制台窗口")
-    print("  - 编译时间约为正式版本的 50-70%")
+    print("[FAST] Fast Build Mode:")
+    print("  - Use onedir mode (output as folder)")
+    print("  - Disable LTO optimization")
+    print("  - Enable console window")
+    print("  - Compile time approx 50-70% of release version")
     print()
     
     # 检查依赖
@@ -172,20 +196,20 @@ def main():
     try:
         result = subprocess.run(cmd, check=True)
         print("\n" + "=" * 60)
-        print("✓ Build completed successfully!")
+        print("[OK] Build completed successfully!")
         print("=" * 60)
         
         if platform.system() == "Windows":
-            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Fast.exe"
+            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Debug.exe"
         else:
-            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Fast"
+            exe_path = "dist/RawAlchemy-Fast.dist/RawAlchemy-Debug"
         
-        print(f"\n可执行文件位置: {exe_path}")
-        print("\n⚠️  这是快速构建版本，用于测试。")
-        print("    正式发布请使用: python build_nuitka.py")
+        print(f"\nExecutable location: {exe_path}")
+        print("\n[WARN] This is a fast build version for testing.")
+        print("       For official release use: python build_nuitka.py")
     except subprocess.CalledProcessError as e:
         print("\n" + "=" * 60)
-        print("✗ Build failed!")
+        print("[ERROR] Build failed!")
         print("=" * 60)
         print(f"\nError: {e}")
         sys.exit(1)

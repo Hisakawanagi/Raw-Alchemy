@@ -18,6 +18,7 @@ def get_nuitka_command():
     """Generate Nuitka build command based on platform"""
     
     system = platform.system()
+    extra_args = sys.argv[1:]
     
     # Base command
     cmd = [
@@ -34,42 +35,55 @@ def get_nuitka_command():
         "--output-filename=RawAlchemy",
         
         # 优化选项
-        "--lto=yes",  # Link Time Optimization
-        "--jobs=32",   # 并行编译
+        "--lto={}".format("no" if system == "Darwin" else "yes"),  # macOS 上禁用 LTO 以缩短构建时间
+        "--jobs=4",   # 并行编译
         
         # Python 标志
         "--python-flag=no_site",
         "--python-flag=no_warnings",
         
+        # 移除 tkinter 依赖 (除非真的用到)
+        "--nofollow-import-to=tkinter",
+
         # 包含必要的包
         "--include-package=numpy",
         "--include-package=numba",
+        "--include-module=raw_alchemy.math_ops_ext",
         "--include-package=rawpy",
         "--include-package=colour",
-        "--include-package=scipy",
+        "--include-package=scipy", # 恢复完整的 SciPy 以解决 'scipy is not a package' 错误
         "--include-package=PIL",
         "--include-package=pillow_heif",
-        "--include-package=PyQt6",
+        "--include-package=PySide6", 
         "--include-package=qfluentwidgets",
         "--include-package=send2trash",
         
         # 包含数据文件
-        "--include-data-dir=src/raw_alchemy/vendor=vendor",
-        "--include-data-dir=src/raw_alchemy/locales=locales",
+        # 注意：我们需要保持包结构，所以映射到 raw_alchemy/vendor
+        "--include-data-dir=src/raw_alchemy/vendor=raw_alchemy/vendor",
+        "--include-data-dir=src/raw_alchemy/locales=raw_alchemy/locales",
         "--include-data-files=icon.ico=icon.ico",
         "--include-data-files=icon.png=icon.png",
         
-        # PyQt6 插件支持
-        "--enable-plugin=pyqt6",
+        # PySide6 插件支持
+        "--enable-plugin=pyside6",
         
         # 排除不需要的模块以减小体积
+        "--nofollow-import-to=nuitka",
         "--nofollow-import-to=pandas",
         "--nofollow-import-to=IPython",
+        "--nofollow-import-to=PyQt6",
         "--nofollow-import-to=PyQt5",
         "--nofollow-import-to=PySide2",
         "--nofollow-import-to=test",
+        "--nofollow-import-to=numba.tests",
+        "--nofollow-import-to=colour.utilities.tests", # 排除 colour 的测试代码
+        "--nofollow-import-to=doctest", # 排除 doctest
+        "--nofollow-import-to=PyInstaller", # 排除 PyInstaller 及其相关依赖
         "--nofollow-import-to=distutils",
         "--nofollow-import-to=setuptools",
+        "--nofollow-import-to=matplotlib", # 排除 matplotlib 减少体积
+        "--nofollow-import-to=pycc", # 排除 numba pycc 编译工具
         
         # 警告控制
         "--assume-yes-for-downloads",
@@ -77,6 +91,23 @@ def get_nuitka_command():
         "--warn-unusual-code",
     ]
     
+    # 强制包含 vendor 中的 DLL (Nuitka 默认可能会在 data-dir 中过滤掉 DLL)
+    vendor_dir = os.path.join("src", "raw_alchemy", "vendor")
+    if os.path.exists(vendor_dir):
+        print(f"Scanning for DLLs in {vendor_dir}...")
+        for root, _, files in os.walk(vendor_dir):
+            for file in files:
+                if file.lower().endswith(('.dll', '.so', '.dylib')):
+                    src_path = os.path.join(root, file)
+                    # 计算相对路径: src/raw_alchemy/vendor/... -> raw_alchemy/vendor/...
+                    # 我们希望它在 dist 中的位置与源码结构一致
+                    rel_path = os.path.relpath(src_path, "src")
+                    print(f"  + Force including DLL: {src_path} -> {rel_path}")
+                    cmd.append(f"--include-data-files={src_path}={rel_path}")
+
+    # 添加命令行传入的额外参数
+    cmd.extend(extra_args)
+
     # 平台特定设置
     if system == "Windows":
         cmd.extend([
@@ -110,23 +141,23 @@ def check_dependencies():
             result = subprocess.run([sys.executable, "-m", "nuitka", "--version"],
                                   capture_output=True, text=True, timeout=5)
             version = result.stdout.strip().split('\n')[0] if result.stdout else "installed"
-            print(f"✓ Nuitka: {version}")
+            print(f"[OK] Nuitka: {version}")
         except:
-            print("✓ Nuitka installed")
+            print("[OK] Nuitka installed")
     except ImportError:
-        print("✗ Nuitka not found. Install with: pip install nuitka")
+        print("[ERROR] Nuitka not found. Install with: pip install nuitka")
         return False
     
     # 检查其他依赖
-    required = ['numpy', 'numba', 'rawpy', 'colour', 'PyQt6', 'qfluentwidgets']
+    required = ['numpy', 'numba', 'rawpy', 'colour', 'PySide6']
     missing = []
     for pkg in required:
         try:
             __import__(pkg)
-            print(f"✓ {pkg} found")
+            print(f"[OK] {pkg} found")
         except ImportError:
             missing.append(pkg)
-            print(f"✗ {pkg} not found")
+            print(f"[MISSING] {pkg} not found")
     
     if missing:
         print(f"\nMissing packages: {', '.join(missing)}")
@@ -162,12 +193,12 @@ def main():
     try:
         result = subprocess.run(cmd, check=True)
         print("\n" + "=" * 60)
-        print("✓ Build completed successfully!")
+        print("[OK] Build completed successfully!")
         print("=" * 60)
         print(f"\nExecutable location: dist/RawAlchemy{'.exe' if platform.system() == 'Windows' else ''}")
     except subprocess.CalledProcessError as e:
         print("\n" + "=" * 60)
-        print("✗ Build failed!")
+        print("[ERROR] Build failed!")
         print("=" * 60)
         print(f"\nError: {e}")
         sys.exit(1)
