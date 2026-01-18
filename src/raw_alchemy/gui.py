@@ -1103,6 +1103,12 @@ class InspectorPanel(ScrollArea):
 
 class MainWindow(FluentWindow):
     def __init__(self):
+        # Initialize image states BEFORE super().__init__() to avoid resizeEvent issues
+        # FluentWindow.__init__ may trigger resizeEvent during initialization
+        self.original = ImageState()  # RAW decoded
+        self.current = ImageState()   # Processed with current params
+        self.baseline = ImageState()  # Saved baseline (optional)
+        
         super().__init__()
         self.base_title = "Raw Alchemy Studio"
         self.setWindowTitle(self.base_title)
@@ -1122,11 +1128,6 @@ class MainWindow(FluentWindow):
         self.last_lut_folder_path = None  # Last LUT folder
         self.last_lensfun_db_path = None  # Last Lensfun DB path
         self.last_export_path = None  # Last export folder
-        
-        # Image states - clean replacement for scattered pixmap variables
-        self.original = ImageState()  # RAW decoded
-        self.current = ImageState()   # Processed with current params
-        self.baseline = ImageState()  # Saved baseline (optional)
         
         # Request tracking
         self.current_request_id = 0
