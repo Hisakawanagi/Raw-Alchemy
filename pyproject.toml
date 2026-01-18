@@ -22,7 +22,7 @@ dependencies = [
     "scipy",
     "Pillow",
     "pillow-heif",
-    "nuitka",
+    "pyinstaller",
     "zstandard",
     "ordered-set",
     "numba",
