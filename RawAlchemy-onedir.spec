@@ -9,9 +9,31 @@ import sys
 strip_executable = True if sys.platform.startswith('linux') else False
 
 # --- Platform-specific binaries ---
+import os
+import glob
+
 binaries_list = []
+
+# Add math_ops_ext compiled module (.pyd on Windows, .so on Linux/macOS)
+# First check in src directory (development)
+math_ops_ext_files = glob.glob(os.path.join('src', 'raw_alchemy', 'math_ops_ext*.pyd'))
+if not math_ops_ext_files:
+    math_ops_ext_files = glob.glob(os.path.join('src', 'raw_alchemy', 'math_ops_ext*.so'))
+# If not found, check in installed package
+if not math_ops_ext_files:
+    try:
+        import raw_alchemy
+        pkg_dir = os.path.dirname(raw_alchemy.__file__)
+        math_ops_ext_files = glob.glob(os.path.join(pkg_dir, 'math_ops_ext*.pyd'))
+        if not math_ops_ext_files:
+            math_ops_ext_files = glob.glob(os.path.join(pkg_dir, 'math_ops_ext*.so'))
+    except ImportError:
+        pass
+
+for pyd_file in math_ops_ext_files:
+    binaries_list.append((pyd_file, 'raw_alchemy'))
+
 if sys.platform == 'darwin' or sys.platform.startswith('linux'):
-    import os
     import rawpy
 
     # Find the path to libraw_r library within the rawpy package
@@ -30,7 +52,7 @@ a = Analysis(
     pathex=[],
     binaries=binaries_list,
     datas=[('src/raw_alchemy/vendor', 'vendor'),('src/raw_alchemy/locales', 'locales'), ('icon.ico', '.'), ('icon.png', '.')],
-    hiddenimports=['tkinter', 'raw_alchemy.math_ops_ext'],
+    hiddenimports=['tkinter'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
