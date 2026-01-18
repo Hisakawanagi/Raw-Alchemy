@@ -546,22 +546,43 @@ class HistogramWidget(QWidget):
         if img_array is None:
             return
         
-        # 存储待处理数据并启动定时器
-        self.pending_data = img_array
+        # 存储待处理数据的副本，避免跨线程数据竞争
+        try:
+            self.pending_data = img_array.copy() if img_array is not None else None
+        except Exception:
+            # 如果复制失败，跳过此次更新
+            return
         self.update_timer.start()
     
     def _do_update(self):
         """实际执行直方图计算"""
         if self.pending_data is None:
             return
+        
+        # 获取并清除待处理数据，避免重复处理
+        data = self.pending_data
+        self.pending_data = None
             
         try:
-             # 使用更激进的采样率提升性能 (8x vs 4x)
-             self.hist_data = utils.compute_histogram_fast(self.pending_data, bins=100, sample_rate=4)
-             self.update()  # 使用update()而非repaint(),让Qt优化重绘
-             self.pending_data = None
+            # 确保数据有效
+            if data is None or data.size == 0:
+                return
+            
+            # 确保数据是连续的 numpy 数组
+            if not data.flags['C_CONTIGUOUS']:
+                data = np.ascontiguousarray(data)
+            
+            # 使用更激进的采样率提升性能 (8x vs 4x)
+            self.hist_data = utils.compute_histogram_fast(data, bins=100, sample_rate=4)
+            self.update()  # 使用update()而非repaint(),让Qt优化重绘
+        except (RuntimeError, OSError, ValueError, TypeError) as e:
+            # 捕获常见的数组操作错误，静默处理
+            # 这些错误通常是由于跨线程数据竞争导致的
+            pass
         except Exception as e:
-             print(f"Histogram update error: {e}")
+            # 其他未知错误，打印但不崩溃
+            import traceback
+            print(f"Histogram update error: {type(e).__name__}: {e}")
 
     def paintEvent(self, event):
         if not self.hist_data:
@@ -1967,7 +1988,12 @@ class MainWindow(FluentWindow):
             return
         
         # Update current state
-        self.current.update_full(pixmap, img_float)
+        self.current.update_full(pixmap, img_float.copy())  # Copy to avoid race conditions
+        
+        # If original is not set yet, set it to the first processed result
+        # This allows compare function to work (show original vs current after adjustments)
+        if self.original.full is None:
+            self.original.update_full(pixmap.copy(), img_float.copy())
         
         # Update auto EV value if in auto mode
         if self.right_panel.auto_exp_radio.isChecked():
@@ -2152,6 +2178,12 @@ class MainWindow(FluentWindow):
         display_pixmap = img_to_show.get_display(self.preview_lbl.size())
         if display_pixmap:
             self.preview_lbl.setPixmap(display_pixmap)
+
+        InfoBar.info(
+            tr('compare_showing_baseline'),
+            "",
+            parent=self
+        )
 
     def show_processed(self, event):
         """Show current processed image"""

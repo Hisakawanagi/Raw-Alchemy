@@ -84,18 +84,6 @@ jobs:
       - name: Install macOS system dependencies
         run: |
           brew install create-dmg python-tk@3.12 llvm ccache
-          echo "CC=ccache $(brew --prefix llvm)/bin/clang" >> $GITHUB_ENV
-          echo "CCACHE_SLOPPINESS=pch_defines,time_macros" >> $GITHUB_ENV
-          echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=500M" >> $GITHUB_ENV
-          
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ runner.os }}-nuitka-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-nuitka-
-
       - name: Convert PNG to ICNS for macOS icon
         run: |
           mkdir -p icon.iconset
