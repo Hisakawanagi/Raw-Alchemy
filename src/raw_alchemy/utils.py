@@ -653,14 +653,22 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
     logger(f"  🧬 [Lens] {params.get('camera_maker')} {params.get('camera_model')} + {params.get('lens_model')}")
     
     try:
+        # Extract only the parameters that lensfun_wrapper.apply_lens_correction accepts
+        lens_correction_args = {
+            'image': image,
+            'camera_maker': params.get('camera_maker'),
+            'camera_model': params.get('camera_model'),
+            'lens_maker': None,  # Not in EXIF data
+            'lens_model': params.get('lens_model'),
+            'focal_length': params.get('focal_length'),
+            'aperture': params.get('aperture'),
+            'custom_db_path': custom_db_path,
+            'logger': logger,
+        }
+        
         # lensfun_wrapper 内部通常会调用 cv2.remap 或 scipy.map_coordinates
         # 这必然返回新图像
-        corrected = lf.apply_lens_correction(
-            image=image,
-            custom_db_path=custom_db_path,
-            logger=logger,
-            **params # 传递所有提取到的参数
-        )
+        corrected = lf.apply_lens_correction(**lens_correction_args)
         
         # 显式帮助 GC (虽然 Python 会自动处理，但在大内存压力下 explicit is better)
         # 这里原来的 image 引用计数会减少，如果外面没有引用，旧内存会被释放
@@ -670,20 +678,196 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
         logger(f"  ❌ [Lens Error] {e}")
         return image # 失败则返回原图
 
-def extract_lens_exif(raw: rawpy.RawPy, logger: callable = print) -> dict:
-    """使用 rawpy 对象从 RAW 文件中提取 EXIF 和镜头信息。"""
-    result = {}
-    try:
-        # 使用新的 rawpy 参数对象 (rawpy >= 0.20.0)
-        result['camera_maker'] = raw.camera_params.make
-        result['camera_model'] = raw.camera_params.model
-        result['lens_maker'] = raw.lens_params.make
-        result['lens_model'] = raw.lens_params.model
-        result['focal_length'] = raw.other_params.focal_len
-        result['aperture'] = raw.other_params.aperture
-            
-    except Exception as e:
-        logger(f"  ❌ [EXIF Error] {e}")
+def extract_lens_exif(raw: rawpy.RawPy, logger: callable = print, raw_path: str = None) -> dict:
+    """
+    Extract EXIF and lens information from RAW file.
     
-    # 过滤掉 None 值，防止下游出错
-    return {k: v for k, v in result.items() if v is not None}
+    Tries pyexiv2 first (better for RAW files), falls back to piexif for JPEGs.
+        
+    Args:
+        raw: rawpy.RawPy object (for compatibility, not used for EXIF)
+        logger: logging callback function
+        raw_path: path to RAW file for EXIF extraction
+    
+    Returns:
+        dict: EXIF data (empty if not available)
+    """
+    result = {}
+    
+    try:
+        logger(f"  [EXIF Info] Attempting EXIF extraction...")
+        
+        if raw_path:
+            # Try pyexiv2 first (better support for RAW formats like ARW)
+            try:
+                import pyexiv2
+                import os
+                
+                if os.path.exists(raw_path):
+                    image = pyexiv2.Image(raw_path)
+                    exif_data = image.read_exif()
+                    
+                    # Extract common EXIF fields using pyexiv2 keys
+                    exif_key_mapping = {
+                        'Exif.Image.Make': 'camera_maker',
+                        'Exif.Image.Model': 'camera_model',
+                        'Exif.Image.DateTime': 'timestamp',
+                        'Exif.Photo.ISOSpeedRatings': 'iso',
+                        'Exif.Photo.FocalLength': 'focal_length',
+                        'Exif.Photo.ExposureTime': 'shutter_speed',
+                        'Exif.Photo.FNumber': 'aperture',
+                        'Exif.Photo.LensModel': 'lens_model',
+                        'Exif.Photo.ExposureBiasValue': 'exposure_bias',
+                        'Exif.Photo.MeteringMode': 'metering_mode',
+                        'Exif.Photo.Flash': 'flash',
+                        'Exif.Photo.ExposureProgram': 'exposure_program',
+                    }
+                    
+                    for exif_key, result_key in exif_key_mapping.items():
+                        if exif_key in exif_data:
+                            value = exif_data[exif_key]
+                            
+                            # Parse fraction strings like "28/10" or "1/40"
+                            if isinstance(value, str) and '/' in value:
+                                try:
+                                    parts = value.split('/')
+                                    numerator = float(parts[0])
+                                    denominator = float(parts[1])
+                                    if denominator != 0:
+                                        result[result_key] = numerator / denominator
+                                except:
+                                    result[result_key] = value
+                            else:
+                                try:
+                                    result[result_key] = float(value)
+                                except:
+                                    result[result_key] = value
+                    
+                    image.close()
+                    
+                    if result:
+                        logger(f"  [EXIF Success] Extracted {len(result)} EXIF fields using pyexiv2")
+                        for key, value in result.items():
+                            value_str = str(value)
+                            if len(value_str) > 40:
+                                value_str = value_str[:37] + "..."
+                            logger(f"     {key}: {value_str}")
+                        return result
+            except ImportError:
+                logger(f"  [EXIF Info] pyexiv2 not available, trying piexif...")
+            except Exception as e:
+                logger(f"  [EXIF Warning] pyexiv2 extraction failed: {e}, trying piexif...")
+            
+            # Fallback to piexif for JPEG or if pyexiv2 fails
+            try:
+                import piexif
+                import os
+                
+                if os.path.exists(raw_path):
+                    exif_dict = piexif.load(raw_path)
+                    
+                    # Extract common EXIF fields
+                    try:
+                        if "0th" in exif_dict:
+                            ifd_0th = exif_dict["0th"]
+                            
+                            # Make (271)
+                            if 271 in ifd_0th:
+                                val = ifd_0th[271]
+                                if isinstance(val, bytes):
+                                    val = val.decode('utf-8', errors='ignore')
+                                result['camera_maker'] = val.strip()
+                            
+                            # Model (272)
+                            if 272 in ifd_0th:
+                                val = ifd_0th[272]
+                                if isinstance(val, bytes):
+                                    val = val.decode('utf-8', errors='ignore')
+                                result['camera_model'] = val.strip()
+                            
+                            # DateTime (306)
+                            if 306 in ifd_0th:
+                                val = ifd_0th[306]
+                                if isinstance(val, bytes):
+                                    val = val.decode('utf-8', errors='ignore')
+                                result['timestamp'] = val.strip()
+                    except:
+                        pass
+                    
+                    try:
+                        if "Exif" in exif_dict:
+                            ifd_exif = exif_dict["Exif"]
+                            
+                            # ISO (34855)
+                            if 34855 in ifd_exif:
+                                result['iso'] = ifd_exif[34855]
+                            
+                            # FocalLength (37386)
+                            if 37386 in ifd_exif:
+                                focal_tuple = ifd_exif[37386]
+                                if isinstance(focal_tuple, tuple) and len(focal_tuple) == 2:
+                                    result['focal_length'] = focal_tuple[0] / focal_tuple[1]
+                            
+                            # ExposureTime / Shutter Speed (33434)
+                            if 33434 in ifd_exif:
+                                exp_tuple = ifd_exif[33434]
+                                if isinstance(exp_tuple, tuple) and len(exp_tuple) == 2:
+                                    result['shutter_speed'] = exp_tuple[1] / exp_tuple[0]
+                            
+                            # FNumber / Aperture (37378)
+                            if 37378 in ifd_exif:
+                                aperture_tuple = ifd_exif[37378]
+                                if isinstance(aperture_tuple, tuple) and len(aperture_tuple) == 2:
+                                    result['aperture'] = aperture_tuple[0] / aperture_tuple[1]
+                            
+                            # LensModel (42036)
+                            if 42036 in ifd_exif:
+                                val = ifd_exif[42036]
+                                if isinstance(val, bytes):
+                                    val = val.decode('utf-8', errors='ignore')
+                                result['lens_model'] = val.strip()
+                            
+                            # ExposureBias / Exposure Compensation (37380)
+                            if 37380 in ifd_exif:
+                                bias_tuple = ifd_exif[37380]
+                                if isinstance(bias_tuple, tuple) and len(bias_tuple) == 2:
+                                    result['exposure_bias'] = bias_tuple[0] / bias_tuple[1]
+                            
+                            # Metering Mode (37383)
+                            if 37383 in ifd_exif:
+                                metering_mode = ifd_exif[37383]
+                                result['metering_mode'] = metering_mode
+                            
+                            # Flash (37385)
+                            if 37385 in ifd_exif:
+                                flash_value = ifd_exif[37385]
+                                result['flash'] = flash_value
+                            
+                            # ExposureProgram (34850)
+                            if 34850 in ifd_exif:
+                                exposure_program = ifd_exif[34850]
+                                result['exposure_program'] = exposure_program
+                    except:
+                        pass
+                    
+                    if result:
+                        logger(f"  [EXIF Success] Extracted {len(result)} EXIF fields using piexif")
+                        for key, value in result.items():
+                            value_str = str(value)
+                            if len(value_str) > 40:
+                                value_str = value_str[:37] + "..."
+                            logger(f"     {key}: {value_str}")
+                        return result
+            except ImportError:
+                logger(f"  [EXIF Warning] piexif not installed, skipping EXIF extraction")
+                return result
+            except Exception as e:
+                logger(f"  [EXIF Warning] Failed to extract EXIF with piexif: {e}")
+                return result
+        
+        logger(f"  [EXIF Info] No EXIF data available")
+        
+    except Exception as e:
+        logger(f"  [EXIF Warning] {type(e).__name__}: {e}")
+    
+    return result

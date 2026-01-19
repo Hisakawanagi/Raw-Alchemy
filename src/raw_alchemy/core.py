@@ -38,8 +38,8 @@ def process_image(
     # --- Step 1: 解码 RAW (统一至 ProPhoto RGB / 16-bit Linear) ---
     logger.info(f"  🔹 [Step 1] Decoding RAW...")
     with rawpy.imread(raw_path) as raw:
-        # 提取 EXIF (用于镜头校正)
-        exif_data = utils.extract_lens_exif(raw, logger=logger.log)
+        # 提取 EXIF (用于镜头校正和元数据保存)
+        exif_data = utils.extract_lens_exif(raw, logger=logger.log, raw_path=raw_path)
 
         # 解码: 必须使用 16-bit 以保留 Log 转换所需的动态范围
         prophoto_linear = raw.postprocess(
@@ -137,8 +137,10 @@ def process_image(
 
     # --- Step 6: 保存（使用模块化的文件保存功能）---
     logger.info(f"  💾 Saving to {os.path.basename(output_path)}...")
-    save_image(img, output_path, logger)
+    save_image(img, output_path, logger, exif_data=exif_data)
     
     # --- 最终清理 ---
     del img
     gc.collect()
+    
+    return True

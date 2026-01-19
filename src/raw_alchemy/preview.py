@@ -197,7 +197,7 @@ class PreviewWindow:
             try:
                 with rawpy.imread(self.raw_path) as raw:
                     # 提取EXIF
-                    self.exif_data = utils.extract_lens_exif(raw, logger=print)
+                    self.exif_data = utils.extract_lens_exif(raw, logger=print, raw_path=self.raw_path)
                     
                     # 解码RAW - 使用半尺寸解码加快预览速度（速度提升约4倍）
                     prophoto_linear = raw.postprocess(
