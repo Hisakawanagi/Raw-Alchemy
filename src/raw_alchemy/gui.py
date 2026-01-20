@@ -1298,6 +1298,14 @@ class MainWindow(FluentWindow):
         self.gallery_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.gallery_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.gallery_list.setSpacing(10)
+
+        # 禁用左侧缩略图拖拽（避免误拖动导致内部移动/拖放）
+        self.gallery_list.setDragEnabled(False)
+        self.gallery_list.setAcceptDrops(False)
+        self.gallery_list.setDropIndicatorShown(False)
+        self.gallery_list.setDragDropMode(QListWidget.DragDropMode.NoDragDrop)
+        self.gallery_list.setDefaultDropAction(Qt.DropAction.IgnoreAction)
+
         self.gallery_list.itemClicked.connect(self.on_gallery_item_clicked)
         self.gallery_list.currentItemChanged.connect(lambda current, prev: self.on_gallery_item_clicked(current))
         self.gallery_list.setStyleSheet("""
