@@ -78,7 +78,7 @@ def _save_heif(img: np.ndarray, output_path: str, logger: Logger):
         size=(output_image_uint16.shape[1], output_image_uint16.shape[0]),
         data=output_image_uint16.tobytes()
     )
-    heif_file.save(output_path, quality=-1, bit_depth=10)
+    heif_file.save(output_path, quality=85, bit_depth=10)
 
 
 def _save_jpeg_or_other(img: np.ndarray, output_path: str, file_ext: str, logger: Logger):
@@ -92,8 +92,8 @@ def _save_jpeg_or_other(img: np.ndarray, output_path: str, file_ext: str, logger
     save_params = {}
     if file_ext in ['.jpg', '.jpeg']:
         save_params = {
-            'quality': 95,
-            'subsampling': 0,
+            'quality': 90,
+            'subsampling': 2,
             'optimize': True
         }
     
