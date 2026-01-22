@@ -46,7 +46,7 @@ def process_image(
     logger.info(f"  🔹 [Step 1] Decoding RAW...")
     with rawpy.imread(raw_path) as raw:
         # 提取 EXIF (用于镜头校正)
-        exif_data = utils.extract_lens_exif(raw, logger=logger.log)
+        exif_data = utils.extract_lens_exif(raw)
 
         # 解码: 必须使用 16-bit 以保留 Log 转换所需的动态范围
         prophoto_linear = raw.postprocess(
@@ -78,7 +78,7 @@ def process_image(
     else:
         # 路径 B: 自动测光（使用策略模式）
         logger.info(f"  🔹 [Step 2] Auto Exposure ({metering_mode})")
-        img, applied_gain = apply_auto_exposure(img, source_cs, metering_mode, target_gray=0.18, logger=logger)
+        img, applied_gain = apply_auto_exposure(img, source_cs, metering_mode, target_gray=0.18)
 
 
     # --- Step 3: 基础校正 (WB, Lens, HL/SH) ---
@@ -89,8 +89,7 @@ def process_image(
         img = utils.apply_lens_correction(
             img,
             exif_data=exif_data,
-            custom_db_path=custom_db_path,
-            logger=logger.log
+            custom_db_path=custom_db_path
         )
     
     # 3.2 白平衡

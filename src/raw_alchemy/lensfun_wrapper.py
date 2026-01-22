@@ -8,6 +8,7 @@ import platform
 import ctypes
 from typing import Optional
 import numpy as np
+from loguru import logger
 
 def _get_base_path():
     """
@@ -82,9 +83,9 @@ try:
     _lensfun = _load_lensfun_library()
 except RuntimeError as e:
     _lensfun = None
-    # 打印更详细的错误信息
-    print(f"  ⚠️ [Lensfun] Warning: {e}")
-    print("  ⚠️ [Lensfun] Lens correction will be disabled.")
+    # 记录更详细的错误信息
+    logger.warning(f"  ⚠️ [Lensfun] Warning: {e}")
+    logger.warning("  ⚠️ [Lensfun] Lens correction will be disabled.")
 
 
 # ============================================================================
@@ -143,12 +144,54 @@ class lfDatabase(ctypes.Structure):
     pass
 
 class lfCamera(ctypes.Structure):
-    """相机对象 (不透明)"""
-    pass
+    """相机对象
+    
+    根据lensfun.h定义的lfCamera结构体:
+    - Maker: lfMLstr (char*)
+    - Model: lfMLstr (char*)
+    - Variant: lfMLstr (char*)
+    - Mount: char*
+    - CropFactor: float
+    - Score: int
+    """
+    _fields_ = [
+        ("Maker", ctypes.c_char_p),
+        ("Model", ctypes.c_char_p),
+        ("Variant", ctypes.c_char_p),
+        ("Mount", ctypes.c_char_p),
+        ("CropFactor", ctypes.c_float),
+        ("Score", ctypes.c_int),
+    ]
 
 class lfLens(ctypes.Structure):
-    """镜头对象 (不透明)"""
-    pass
+    """镜头对象
+    
+    根据lensfun.h定义的lfLens结构体:
+    - Maker: lfMLstr (char*)
+    - Model: lfMLstr (char*)
+    - MinFocal: float
+    - MaxFocal: float
+    - MinAperture: float
+    - MaxAperture: float
+    - Mounts: char**
+    - Type: lfLensType
+    - CropFactor: float (已弃用)
+    - AspectRatio: float
+    - CenterX: float
+    - CenterY: float
+    - Score: int
+    
+    注意：这里只定义我们需要访问的前几个字段
+    """
+    _fields_ = [
+        ("Maker", ctypes.c_char_p),
+        ("Model", ctypes.c_char_p),
+        ("MinFocal", ctypes.c_float),
+        ("MaxFocal", ctypes.c_float),
+        ("MinAperture", ctypes.c_float),
+        ("MaxAperture", ctypes.c_float),
+        # 其他字段暂不定义，因为我们主要需要 Maker 和 Model
+    ]
 
 class lfModifier(ctypes.Structure):
     """校正修改器对象 (不透明)"""
@@ -269,7 +312,7 @@ if _lensfun:
 class LensfunDatabase:
     """Lensfun数据库包装器"""
     
-    def __init__(self, custom_db_path: Optional[str] = None, logger: callable = print):
+    def __init__(self, custom_db_path: Optional[str] = None):
         if not _lensfun:
             raise RuntimeError("Lensfun library not loaded")
         self.db = _lensfun.lf_db_create()
@@ -282,10 +325,10 @@ class LensfunDatabase:
         
         result = -1
         if os.path.isdir(db_path):
-            logger(f"  ✨ [Lensfun] Found local database, loading from: {db_path}")
+            logger.info(f"  ✨ [Lensfun] Found local database, loading from: {db_path}")
             result = _lensfun.lf_db_load_path(self.db, db_path.encode('utf-8'))
         else:
-            logger(f"  ℹ️ [Lensfun] Local database not found, loading from system default paths.")
+            logger.info(f"  ℹ️ [Lensfun] Local database not found, loading from system default paths.")
             result = _lensfun.lf_db_load(self.db)
 
         # Check loading result
@@ -299,7 +342,7 @@ class LensfunDatabase:
         
         # 加载用户自定义数据库
         if custom_db_path and os.path.exists(custom_db_path):
-            logger(f"  ✨ [Lensfun] Loading custom database from: {custom_db_path}")
+            logger.info(f"  ✨ [Lensfun] Loading custom database from: {custom_db_path}")
             try:
                 with open(custom_db_path, 'rb') as f:
                     xml_data = f.read()
@@ -337,7 +380,7 @@ class LensfunDatabase:
         maker_b = maker.encode('utf-8') if maker else None
         model_b = model.encode('utf-8')
         
-        lenses = _lensfun.lf_db_find_lenses(self.db, camera, maker_b, model_b, 0)
+        lenses = _lensfun.lf_db_find_lenses(self.db, camera, maker_b, model_b, 1)
         if lenses and lenses[0]:
             return lenses[0]
         return None
@@ -442,13 +485,12 @@ class LensfunModifier:
 _global_db_cache = {}
 _global_db_lock = None
 
-def _get_or_create_database(custom_db_path: Optional[str] = None, logger: callable = print):
+def _get_or_create_database(custom_db_path: Optional[str] = None):
     """
     获取或创建Lensfun数据库（带缓存）
     
     参数:
         custom_db_path: 自定义数据库路径，None表示使用默认数据库
-        logger: 日志函数
     
     返回:
         LensfunDatabase对象
@@ -470,20 +512,19 @@ def _get_or_create_database(custom_db_path: Optional[str] = None, logger: callab
         
         # 创建新数据库并缓存
         try:
-            db = LensfunDatabase(custom_db_path=custom_db_path, logger=logger)
+            db = LensfunDatabase(custom_db_path=custom_db_path)
             _global_db_cache[cache_key] = db
             return db
         except Exception as e:
-            logger(f"  ❌ [Lensfun] Failed to create database: {e}")
+            logger.error(f"  ❌ [Lensfun] Failed to create database: {e}")
             raise
 
-def reload_lensfun_database(custom_db_path: Optional[str] = None, logger: callable = print):
+def reload_lensfun_database(custom_db_path: Optional[str] = None):
     """
     强制重新加载Lensfun数据库（用于更新custom db时）
     
     参数:
         custom_db_path: 自定义数据库路径，None表示重新加载默认数据库
-        logger: 日志函数
     """
     global _global_db_cache, _global_db_lock
     
@@ -505,12 +546,12 @@ def reload_lensfun_database(custom_db_path: Optional[str] = None, logger: callab
         
         # 创建新数据库
         try:
-            db = LensfunDatabase(custom_db_path=custom_db_path, logger=logger)
+            db = LensfunDatabase(custom_db_path=custom_db_path)
             _global_db_cache[cache_key] = db
-            logger(f"  ✅ [Lensfun] Database reloaded successfully")
+            logger.success(f"  ✅ [Lensfun] Database reloaded successfully")
             return db
         except Exception as e:
-            logger(f"  ❌ [Lensfun] Failed to reload database: {e}")
+            logger.error(f"  ❌ [Lensfun] Failed to reload database: {e}")
             raise
 
 # ============================================================================
@@ -531,7 +572,6 @@ def apply_lens_correction(
     correct_vignetting: bool = True,
     distance: float = 1000.0,
     custom_db_path: Optional[str] = None,
-    logger: callable = print,
 ) -> np.ndarray:
     """应用镜头校正到图像
     
@@ -549,13 +589,12 @@ def apply_lens_correction(
         correct_vignetting: 是否校正暗角
         distance: 对焦距离 (米)
         custom_db_path: 自定义数据库路径
-        logger: 日志函数
     
     返回:
         校正后的图像（与输入相同dtype）
     """
     if not _lensfun:
-        logger("  ⚠️ [Lensfun] Library not loaded. Skipping lens correction.")
+        logger.warning("  ⚠️ [Lensfun] Library not loaded. Skipping lens correction.")
         return image
     
     # 记住原始dtype以便最后转换回去
@@ -568,22 +607,33 @@ def apply_lens_correction(
     height, width = image.shape[:2]
     
     # 使用缓存的数据库（避免每次都重新加载）
-    db = _get_or_create_database(custom_db_path=custom_db_path, logger=logger)
+    db = _get_or_create_database(custom_db_path=custom_db_path)
     camera = db.find_camera(camera_maker, camera_model)
     lens = db.find_lens(camera, lens_maker, lens_model)
     
     if not lens:
-        logger(f"  ⚠️ [Lensfun] Lens not found: {lens_maker} {lens_model}. Skipping correction.")
+        logger.warning(f"  ⚠️ [Lensfun] Lens not found: {lens_maker} {lens_model}. Skipping correction.")
         return image
     
     # 确定裁剪系数
     if crop_factor is None:
+        # 优先从相机获取crop factor
         if camera:
-            # 从相机对象获取crop factor (需要访问C结构体成员)
-            # 简化处理：使用默认值1.0
+            try:
+                crop_factor = camera.contents.CropFactor
+                if crop_factor > 0:  # 确保是有效值
+                    logger.info(f"  📷 [Lensfun] Using camera crop factor: {crop_factor:.2f}")
+                else:
+                    raise ValueError("Invalid crop factor from camera")
+            except (AttributeError, ValueError) as e:
+                logger.warning(f"  ⚠️ [Lensfun] Could not read camera crop factor: {e}")
+                crop_factor = None
+        
+        # 如果相机没有提供有效的crop factor，使用默认值
+        # 注意：lfLens.CropFactor已弃用且结构体复杂，不建议直接访问
+        if crop_factor is None:
             crop_factor = 1.0
-        else:
-            crop_factor = 1.0
+            logger.info(f"  ℹ️ [Lensfun] Using default crop factor: {crop_factor}")
     
     # 创建修改器
     modifier = LensfunModifier(lens, focal_length, crop_factor, width, height, LF_PF_F32)
@@ -597,7 +647,7 @@ def apply_lens_correction(
             modifier.enable_scaling(1.0/auto_scale)
         else:
             modifier.enable_scaling(auto_scale)
-        logger(f"  ⚖️ [Lensfun] Auto-scaling enabled with factor: {auto_scale:.4f}")
+        logger.info(f"  ⚖️ [Lensfun] Auto-scaling enabled with factor: {auto_scale:.4f}")
 
     if correct_tca:
         modifier.enable_tca_correction()
@@ -643,4 +693,63 @@ def apply_lens_correction(
         output = output.astype(original_dtype)
     
     return output
+
+
+def get_lens_info(
+    camera_maker: Optional[str],
+    camera_model: str,
+    lens_maker: Optional[str],
+    lens_model: str,
+    custom_db_path: Optional[str] = None,
+) -> Optional[dict]:
+    """获取镜头信息（厂商和名称）
+    
+    参数:
+        camera_maker: 相机制造商
+        camera_model: 相机型号
+        lens_maker: 镜头制造商
+        lens_model: 镜头型号
+        custom_db_path: 自定义数据库路径
+    
+    返回:
+        包含镜头信息的字典，格式为:
+        {
+            'maker': str,           # 镜头厂商
+            'model': str,           # 镜头名称
+            'min_focal': float,     # 最小焦距
+            'max_focal': float,     # 最大焦距
+            'min_aperture': float,  # 最小光圈
+            'max_aperture': float   # 最大光圈
+        }
+        如果未找到镜头则返回 None
+    """
+    if not _lensfun:
+        logger.warning("  ⚠️ [Lensfun] Library not loaded. Cannot get lens info.")
+        return None
+    
+    try:
+        # 使用缓存的数据库
+        db = _get_or_create_database(custom_db_path=custom_db_path)
+        camera = db.find_camera(camera_maker, camera_model)
+        lens = db.find_lens(camera, lens_maker, lens_model)
+        
+        if not lens:
+            logger.warning(f"  ⚠️ [Lensfun] Lens not found: {lens_maker} {lens_model}")
+            return None
+        
+        # 提取镜头信息
+        lens_info = {
+            'maker': lens.contents.Maker.decode('utf-8') if lens.contents.Maker else None,
+            'model': lens.contents.Model.decode('utf-8') if lens.contents.Model else None,
+            'min_focal': lens.contents.MinFocal,
+            'max_focal': lens.contents.MaxFocal,
+            'min_aperture': lens.contents.MinAperture,
+            'max_aperture': lens.contents.MaxAperture,
+        }
+        
+        return lens_info
+        
+    except Exception as e:
+        logger.error(f"  ❌ [Lensfun] Error getting lens info: {e}")
+        return None
 

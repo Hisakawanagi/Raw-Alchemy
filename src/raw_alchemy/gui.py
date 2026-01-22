@@ -33,6 +33,7 @@ from qfluentwidgets import (
 from raw_alchemy import config, utils, orchestrator, metering, lensfun_wrapper, i18n
 from raw_alchemy.i18n import tr
 from raw_alchemy.orchestrator import SUPPORTED_RAW_EXTENSIONS
+from loguru import logger
 
 # ==============================================================================
 #                               Version & License Info
@@ -47,7 +48,7 @@ def get_version_info():
         from raw_alchemy import __version__
         version = __version__
     except (ImportError, AttributeError):
-        print("Warning: Could not read version from __init__.py")
+        logger.warning("Warning: Could not read version from __init__.py")
     
     return version, license_info
 
@@ -177,7 +178,7 @@ class ThumbnailWorker(QThread):
                                         Qt.TransformationMode.FastTransformation)
                     return full_path, scaled
         except Exception as e:
-            print(f"Error generating thumb for {os.path.basename(full_path)}: {e}")
+            logger.error(f"Error generating thumb for {os.path.basename(full_path)}: {e}")
             import traceback
             traceback.print_exc()
         
@@ -228,7 +229,7 @@ class ThumbnailWorker(QThread):
                         
                         self.progress_update.emit(next_to_emit + 1, total)
                     except Exception as e:
-                        print(f"Error processing thumbnail {full_paths[next_to_emit]}: {e}")
+                        logger.error(f"Error processing thumbnail {full_paths[next_to_emit]}: {e}")
                         self.progress_update.emit(next_to_emit + 1, total)
                     
                     # 移除已完成的任务
@@ -441,11 +442,8 @@ class ImageProcessor(QThread):
             source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
             mode = params.get('metering_mode', 'matrix')
             
-            class DummyLogger:
-                def info(self, *args, **kwargs):
-                    pass
-            
-            _, gain = metering.apply_auto_exposure(img, source_cs, mode, logger=DummyLogger())
+            # metering 模块会使用 loguru
+            _, gain = metering.apply_auto_exposure(img, source_cs, mode)
             applied_ev = np.log2(gain)  # Convert gain to EV
         
         # White Balance
@@ -510,7 +508,7 @@ class ImageProcessor(QThread):
                 else:
                     img = lut.apply(img)
             except Exception as e:
-                print(f"LUT application error: {e}")
+                logger.error(f"LUT application error: {e}")
         
         # Display transform - sRGB Standard
         if not log_space or log_space == 'None':
@@ -580,9 +578,9 @@ class HistogramWidget(QWidget):
             # 这些错误通常是由于跨线程数据竞争导致的
             pass
         except Exception as e:
-            # 其他未知错误，打印但不崩溃
+            # 其他未知错误，记录但不崩溃
             import traceback
-            print(f"Histogram update error: {type(e).__name__}: {e}")
+            logger.error(f"Histogram update error: {type(e).__name__}: {e}")
 
     def paintEvent(self, event):
         if not self.hist_data:
@@ -600,7 +598,7 @@ class HistogramWidget(QWidget):
             if max_val == 0 or max_val < 1e-10:
                 max_val = 1
         except Exception as e:
-            print(f"Error computing max_val: {e}")
+            logger.error(f"Error computing max_val: {e}")
             return
         
         colors = [QColor(255, 50, 50, 180), QColor(50, 255, 50, 180), QColor(50, 50, 255, 180)]
@@ -980,7 +978,7 @@ class InspectorPanel(ScrollArea):
                 main_window.last_lensfun_db_path = file_path
             # 重新加载lensfun数据库
             try:
-                lensfun_wrapper.reload_lensfun_database(custom_db_path=file_path, logger=print)
+                lensfun_wrapper.reload_lensfun_database(custom_db_path=file_path)
                 InfoBar.success(tr('db_loaded'), tr('using_custom_db', name=os.path.basename(file_path)), parent=self)
             except Exception as e:
                 InfoBar.error(tr('db_load_failed'), tr('failed_to_load_db', error=str(e)), parent=self)
@@ -990,7 +988,7 @@ class InspectorPanel(ScrollArea):
         self.db_path_edit.clear()
         # 重新加载默认lensfun数据库
         try:
-            lensfun_wrapper.reload_lensfun_database(custom_db_path=None, logger=print)
+            lensfun_wrapper.reload_lensfun_database(custom_db_path=None)
             InfoBar.info(tr('db_cleared'), tr('using_default_db'), parent=self)
         except Exception as e:
             InfoBar.warning(tr('db_cleared'), f"Warning: {str(e)}", parent=self)
@@ -1204,9 +1202,9 @@ class MainWindow(FluentWindow):
         def preload():
             try:
                 # 预加载默认数据库
-                lensfun_wrapper._get_or_create_database(custom_db_path=None, logger=lambda msg: None)
+                lensfun_wrapper._get_or_create_database(custom_db_path=None)
             except Exception as e:
-                print(f"  ⚠️ [Lensfun] Failed to preload database: {e}")
+                logger.error(f"  ⚠️ [Lensfun] Failed to preload database: {e}")
         
         # 在后台线程中执行，不阻塞GUI
         import threading
@@ -1623,9 +1621,14 @@ class MainWindow(FluentWindow):
         self.check_update_btn = PushButton(tr('check_update'))
         self.check_update_btn.clicked.connect(self.check_for_updates)
         
+        # Export Logs Button
+        self.export_logs_btn = PushButton(tr('export_logs'))
+        self.export_logs_btn.clicked.connect(self.export_logs)
+        
         version_layout.addWidget(version_title)
         version_layout.addWidget(version_text)
         version_layout.addWidget(self.check_update_btn)
+        version_layout.addWidget(self.export_logs_btn)
         about_layout.addWidget(version_card)
         
         # License Card
@@ -1744,6 +1747,48 @@ class MainWindow(FluentWindow):
                 InfoBar.success(
                     tr('no_update'),
                     tr('no_update_message', version=self.current_version),
+                    parent=self
+                 )
+    
+    def export_logs(self):
+        """Export application logs to a user-selected location"""
+        from raw_alchemy.logger import get_log_file_path
+        import shutil
+        
+        # Get the log file path
+        log_file = get_log_file_path()
+        
+        # Check if log file exists
+        if not os.path.exists(log_file):
+            InfoBar.warning(
+                tr('no_logs_found'),
+                tr('no_logs_found'),
+                parent=self
+            )
+            return
+        
+        # Ask user where to save the log file
+        default_name = f"raw_alchemy_logs_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr('export_logs'),
+            default_name,
+            "Log Files (*.log);;All Files (*)"
+        )
+        
+        if save_path:
+            try:
+                # Copy log file to selected location
+                shutil.copy2(log_file, save_path)
+                InfoBar.success(
+                    tr('export_logs_success'),
+                    tr('logs_saved_to', path=save_path),
+                    parent=self
+                )
+            except Exception as e:
+                InfoBar.error(
+                    tr('export_logs_failed'),
+                    str(e),
                     parent=self
                 )
     
@@ -2255,7 +2300,7 @@ class MainWindow(FluentWindow):
                 is_single_export=True
             )
         else:
-            print("[Export] User cancelled or no path selected")
+            logger.debug("[Export] User cancelled or no path selected")
 
     def export_all(self):
         if not self.marked_files:

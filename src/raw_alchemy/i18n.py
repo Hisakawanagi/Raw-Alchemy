@@ -2,10 +2,11 @@
 import os
 import json
 from raw_alchemy.utils import resource_path
+from loguru import logger
 
 class Translator:
     def __init__(self):
-        self.config_file = os.path.expanduser('~/.raw_alchemy_config.json')
+        self.config_file = os.path.expanduser('~/.raw_alchemy/config.json')
         self.current_lang = self._load_language()
         self.translations = {}
         self._load_translations()
@@ -23,10 +24,10 @@ class Translator:
                     with open(lang_file, 'r', encoding='utf-8') as f:
                         self.translations[lang_code] = json.load(f)
                 else:
-                    print(f"Warning: Translation file not found: {lang_file}")
+                    logger.warning(f"Warning: Translation file not found: {lang_file}")
                     self.translations[lang_code] = {}
             except Exception as e:
-                print(f"Error loading translation file {lang_file}: {e}")
+                logger.error(f"Error loading translation file {lang_file}: {e}")
                 self.translations[lang_code] = {}
 
     def get(self, key, **kwargs):
@@ -48,7 +49,7 @@ class Translator:
                     config = json.load(f)
                     return config.get('language', 'en')
         except Exception as e:
-            print(f"Failed to load language config: {e}")
+            logger.error(f"Failed to load language config: {e}")
         return 'en'
     
     def _save_language(self, lang):
@@ -64,7 +65,7 @@ class Translator:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"Failed to save language config: {e}")
+            logger.error(f"Failed to save language config: {e}")
     
     def load_app_settings(self):
         """Load application settings from config file"""
@@ -74,7 +75,7 @@ class Translator:
                     config = json.load(f)
                     return config.get('app_settings', {})
         except Exception as e:
-            print(f"Failed to load app settings: {e}")
+            logger.error(f"Failed to load app settings: {e}")
         return {}
     
     def save_app_settings(self, settings):
@@ -90,7 +91,7 @@ class Translator:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"Failed to save app settings: {e}")
+            logger.error(f"Failed to save app settings: {e}")
 
 _translator = Translator()
 

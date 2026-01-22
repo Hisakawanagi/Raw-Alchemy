@@ -3,13 +3,12 @@
 使用策略模式实现不同的测光算法
 """
 import numpy as np
-from typing import Protocol, Optional
+from typing import Protocol
+from loguru import logger
 
 try:
-    from .logger import Logger
     from . import utils
 except ImportError:
-    from raw_alchemy.logger import Logger
     from raw_alchemy import utils
 
 class MeteringStrategy(Protocol):
@@ -19,8 +18,7 @@ class MeteringStrategy(Protocol):
         self,
         img_linear: np.ndarray,
         source_colorspace,
-        target_gray: float = 0.18,
-        logger: Optional[Logger] = None
+        target_gray: float = 0.18
     ) -> float:
         """
         计算曝光增益
@@ -29,7 +27,6 @@ class MeteringStrategy(Protocol):
             img_linear: 线性图像数据
             source_colorspace: 源色彩空间
             target_gray: 目标灰度值
-            logger: 日志处理器
         
         Returns:
             float: 曝光增益值
@@ -44,8 +41,7 @@ class AverageMeteringStrategy:
         self,
         img_linear: np.ndarray,
         source_colorspace,
-        target_gray: float = 0.18,
-        logger: Optional[Logger] = None
+        target_gray: float = 0.18
     ) -> float:
 
         sample = utils.get_subsampled_view(img_linear)
@@ -64,8 +60,7 @@ class AverageMeteringStrategy:
         
         gain = np.clip(gain, 1.0, 50.0)
         
-        if logger:
-            logger.info(f"  ⚖️  [Auto Exposure] Avg Gain: {gain:.4f}")
+        logger.info(f"  ⚖️  [Auto Exposure] Avg Gain: {gain:.4f}")
         
         return gain
 
@@ -77,8 +72,7 @@ class CenterWeightedMeteringStrategy:
         self,
         img_linear: np.ndarray,
         source_colorspace,
-        target_gray: float = 0.18,
-        logger: Optional[Logger] = None
+        target_gray: float = 0.18
     ) -> float:
 
         sample = utils.get_subsampled_view(img_linear)
@@ -101,8 +95,7 @@ class CenterWeightedMeteringStrategy:
         
         gain = np.clip(gain, 0.1, 100.0)
         
-        if logger:
-            logger.info(f"  ⚖️  [Auto Exposure] Center-Weighted Gain: {gain:.4f}")
+        logger.info(f"  ⚖️  [Auto Exposure] Center-Weighted Gain: {gain:.4f}")
         
         return gain
 
@@ -114,8 +107,7 @@ class HighlightSafeMeteringStrategy:
         self,
         img_linear: np.ndarray,
         source_colorspace,
-        target_gray: float = 0.18,
-        logger: Optional[Logger] = None
+        target_gray: float = 0.18
     ) -> float:
 
         sample = utils.get_subsampled_view(img_linear)
@@ -128,8 +120,7 @@ class HighlightSafeMeteringStrategy:
         else:
             gain = target_high / high_percentile
         
-        if logger:
-            logger.info(f"  🛡️  [Auto Exposure] Highlight Safe Gain: {gain:.4f}")
+        logger.info(f"  🛡️  [Auto Exposure] Highlight Safe Gain: {gain:.4f}")
         
         return gain
 
@@ -141,8 +132,7 @@ class HybridMeteringStrategy:
         self,
         img_linear: np.ndarray,
         source_colorspace,
-        target_gray: float = 0.18,
-        logger: Optional[Logger] = None
+        target_gray: float = 0.18
     ) -> float:
         
         sample = utils.get_subsampled_view(img_linear)
@@ -163,16 +153,14 @@ class HybridMeteringStrategy:
         
         if potential_peak > max_allowed_peak:
             limited_gain = max_allowed_peak / p99
-            if logger:
-                logger.info(f"  🛡️  [Auto Exposure] Hybrid limited. (Desired: {base_gain:.2f} -> Actual: {limited_gain:.2f})")
+            logger.info(f"  🛡️  [Auto Exposure] Hybrid limited. (Desired: {base_gain:.2f} -> Actual: {limited_gain:.2f})")
             gain = limited_gain
         else:
             gain = base_gain
         
         gain = np.clip(gain, 0.1, 100.0)
         
-        if logger:
-            logger.info(f"  ⚖️  [Auto Exposure] Hybrid Gain: {gain:.4f}")
+        logger.info(f"  ⚖️  [Auto Exposure] Hybrid Gain: {gain:.4f}")
         
         return gain
 
@@ -184,8 +172,7 @@ class MatrixMeteringStrategy:
         self,
         img_linear: np.ndarray,
         source_colorspace,
-        target_gray: float = 0.18,
-        logger: Optional[Logger] = None
+        target_gray: float = 0.18
     ) -> float:
         
         sample = utils.get_subsampled_view(img_linear)
@@ -239,14 +226,12 @@ class MatrixMeteringStrategy:
         
         if potential_peak > max_allowed_peak:
             limited_gain = max_allowed_peak / p99
-            if logger:
-                logger.info(f"  🛡️  [Auto Exposure] Matrix limited. (Desired: {gain:.2f} -> Actual: {limited_gain:.2f})")
+            logger.info(f"  🛡️  [Auto Exposure] Matrix limited. (Desired: {gain:.2f} -> Actual: {limited_gain:.2f})")
             gain = limited_gain
         
         gain = np.clip(gain, 0.1, 100.0)
         
-        if logger:
-            logger.info(f"  🤖 [Auto Exposure] Matrix Gain: {gain:.4f}")
+        logger.info(f"  🤖 [Auto Exposure] Matrix Gain: {gain:.4f}")
         
         return gain
 
@@ -284,8 +269,7 @@ def apply_auto_exposure(
     img_linear: np.ndarray,
     source_colorspace,
     metering_mode: str = 'hybrid',
-    target_gray: float = 0.18,
-    logger: Optional[Logger] = None
+    target_gray: float = 0.18
 ) -> tuple[np.ndarray, float]:
     """
     应用自动曝光
@@ -295,14 +279,13 @@ def apply_auto_exposure(
         source_colorspace: 源色彩空间
         metering_mode: 测光模式
         target_gray: 目标灰度值
-        logger: 日志处理器
     
     Returns:
         tuple: (调整后的图像, 应用的增益)
     """
 
     strategy = get_metering_strategy(metering_mode)
-    gain = strategy.calculate_gain(img_linear, source_colorspace, target_gray, logger)
+    gain = strategy.calculate_gain(img_linear, source_colorspace, target_gray)
     utils.apply_gain_inplace(img_linear, float(gain))
     
     return img_linear, float(gain)

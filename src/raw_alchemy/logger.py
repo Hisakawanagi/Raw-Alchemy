@@ -1,53 +1,62 @@
 """
 统一的日志处理模块
-提供一致的日志接口，支持多种输出方式（控制台、队列、文件等）
+使用 loguru 提供一致的日志接口，支持日志文件输出
 """
 from typing import Optional, Any
+from loguru import logger
+import sys
+import os
+from pathlib import Path
 
 
-class Logger:
-    """统一的日志处理器"""
+# 获取日志文件路径
+def get_log_file_path() -> str:
+    """获取日志文件路径"""
+    # 在用户目录下创建日志文件夹
+    log_dir = Path.home() / ".raw_alchemy" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return str(log_dir / "raw_alchemy.log")
+
+
+# 配置全局 loguru logger
+logger.remove()  # 移除默认处理器
+
+# 添加控制台输出
+logger.add(
+    sys.stderr,
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+    level="DEBUG",
+    colorize=True
+)
+
+# 添加文件输出（自动轮转，保留最近7天）
+logger.add(
+    get_log_file_path(),
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+    level="DEBUG",
+    rotation="1 day",      # 每天轮转
+    retention="7 days",    # 保留7天
+    compression="zip",     # 压缩旧日志
+    encoding="utf-8"
+)
+
+
+class LoguruHandler:
+    """
+    Loguru 日志处理器包装类
+    兼容原有的Logger接口
+    """
     
     def __init__(self, log_target: Optional[Any] = None, file_id: Optional[str] = None):
         """
         初始化日志处理器
         
         Args:
-            log_target: 日志输出目标，可以是：
-                       - None: 使用 print
-                       - Queue 对象: 使用 queue.put()
-                       - Callable: 直接调用该函数
+            log_target: 日志输出目标（仅支持Queue对象用于多进程）
             file_id: 文件标识符，用于多文件处理时区分日志来源
         """
         self.log_target = log_target
         self.file_id = file_id
-    
-    def log(self, message: str, level: str = "INFO"):
-        """
-        发送日志消息
-        
-        Args:
-            message: 日志消息内容
-            level: 日志级别 (INFO, ERROR, SUCCESS, WARNING)
-        """
-        formatted_msg = self._format_message(message)
-        
-        if self.log_target is None:
-            # 默认使用 print
-            print(formatted_msg)
-        elif hasattr(self.log_target, 'put'):
-            # 队列模式（多进程/GUI）
-            self.log_target.put({
-                'id': self.file_id,
-                'msg': message,
-                'level': level
-            })
-        elif callable(self.log_target):
-            # 函数模式（CLI）
-            self.log_target(formatted_msg)
-        else:
-            # 兜底
-            print(formatted_msg)
     
     def _format_message(self, message: str) -> str:
         """格式化消息，添加文件 ID 前缀"""
@@ -55,32 +64,68 @@ class Logger:
             return f"[{self.file_id}] {message}"
         return message
     
+    def _output(self, message: str, level: str = "INFO"):
+        """输出日志"""
+        formatted_msg = self._format_message(message)
+        
+        # 如果有Queue目标（多进程模式），同时发送到Queue和loguru
+        if hasattr(self.log_target, 'put'):
+            self.log_target.put({
+                'id': self.file_id,
+                'msg': message,
+                'level': level
+            })
+        
+        # 统一使用loguru输出（会同时输出到控制台和文件）
+        if level == "SUCCESS":
+            logger.success(formatted_msg)
+        elif level == "ERROR":
+            logger.error(formatted_msg)
+        elif level == "WARNING":
+            logger.warning(formatted_msg)
+        elif level == "DEBUG":
+            logger.debug(formatted_msg)
+        else:
+            logger.info(formatted_msg)
+    
+    def log(self, message: str, level: str = "INFO"):
+        """发送日志消息（兼容旧接口）"""
+        self._output(message, level.upper())
+    
     def info(self, message: str):
         """信息级别日志"""
-        self.log(message, "INFO")
+        self._output(message, "INFO")
     
     def error(self, message: str):
         """错误级别日志"""
-        self.log(message, "ERROR")
+        self._output(message, "ERROR")
     
     def success(self, message: str):
         """成功级别日志"""
-        self.log(message, "SUCCESS")
+        self._output(message, "SUCCESS")
     
     def warning(self, message: str):
         """警告级别日志"""
-        self.log(message, "WARNING")
+        self._output(message, "WARNING")
+    
+    def debug(self, message: str):
+        """调试级别日志"""
+        self._output(message, "DEBUG")
 
 
-def create_logger(log_target: Optional[Any] = None, file_id: Optional[str] = None) -> Logger:
+def create_logger(log_target: Optional[Any] = None, file_id: Optional[str] = None) -> LoguruHandler:
     """
     工厂函数：创建日志处理器实例
     
     Args:
-        log_target: 日志输出目标
+        log_target: 日志输出目标（仅Queue对象用于多进程）
         file_id: 文件标识符
     
     Returns:
-        Logger 实例
+        LoguruHandler 实例
     """
-    return Logger(log_target, file_id)
+    return LoguruHandler(log_target, file_id)
+
+
+# 为了向后兼容，保留 Logger 别名
+Logger = LoguruHandler

@@ -3,6 +3,7 @@ import sys
 from typing import Optional
 import rawpy
 import numpy as np
+from loguru import logger
 from raw_alchemy import lensfun_wrapper as lf
 try:
     from raw_alchemy.math_ops_ext import (
@@ -17,7 +18,7 @@ try:
         compute_histogram_channel
     )
 except ImportError:
-    print("Warning: AOT module 'math_ops_ext' not found. Please run 'python src/raw_alchemy/math_ops.py' to compile it.")
+    logger.error("Warning: AOT module 'math_ops_ext' not found. Please run 'python src/raw_alchemy/math_ops.py' to compile it.")
     raise
 
 
@@ -169,7 +170,7 @@ def apply_highlight_shadow(img_linear, highlight=0.0, shadow=0.0, colourspace=No
 
 # ----------------- 测光函数 (全部改为采样 + In-Place) -----------------
 
-def auto_expose_center_weighted(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: callable = print) -> np.ndarray:
+def auto_expose_center_weighted(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
     # 1. 下采样 (速度提升 50-100 倍)
     sample = get_subsampled_view(img_linear)
     
@@ -195,14 +196,15 @@ def auto_expose_center_weighted(img_linear: np.ndarray, source_colorspace, targe
         gain = target_gray / weighted_avg_lum
 
     gain = np.clip(gain, 0.1, 100.0)
-    logger(f"  ⚖️  [Auto Exposure] Center-Weighted Gain: {gain:.4f}")
+    if logger:
+        logger.info(f"  ⚖️  [Auto Exposure] Center-Weighted Gain: {gain:.4f}")
     
     # 4. 原位应用增益到大图
     # img_linear *= gain # Numpy 写法
     apply_gain_inplace(img_linear, float(gain)) # Numba 写法 (稍微更省内存)
     return img_linear
 
-def auto_expose_highlight_safe(img_linear: np.ndarray, clip_threshold: float = 1.0, logger: callable = print) -> np.ndarray:
+def auto_expose_highlight_safe(img_linear: np.ndarray, clip_threshold: float = 1.0, logger: Optional[callable] = None) -> np.ndarray:
     # 1. 下采样
     sample = get_subsampled_view(img_linear)
     
@@ -216,11 +218,12 @@ def auto_expose_highlight_safe(img_linear: np.ndarray, clip_threshold: float = 1
     else:
         gain = target_high / high_percentile
         
-    logger(f"  🛡️  [Auto Exposure] Highlight Safe Gain: {gain:.4f}")
+    if logger:
+        logger.info(f"  🛡️  [Auto Exposure] Highlight Safe Gain: {gain:.4f}")
     apply_gain_inplace(img_linear, float(gain))
     return img_linear
 
-def auto_expose_linear(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: callable = print) -> np.ndarray:
+def auto_expose_linear(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
     # 1. 下采样
     sample = get_subsampled_view(img_linear)
     
@@ -238,12 +241,13 @@ def auto_expose_linear(img_linear: np.ndarray, source_colorspace, target_gray: f
         gain = target_gray / avg_lum
 
     gain = np.clip(gain, 1.0, 50.0)
-    logger(f"  ⚖️  [Auto Exposure] Avg Gain: {gain:.4f}")
+    if logger:
+        logger.info(f"  ⚖️  [Auto Exposure] Avg Gain: {gain:.4f}")
     
     apply_gain_inplace(img_linear, float(gain))
     return img_linear
 
-def auto_expose_hybrid(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: callable = print) -> np.ndarray:
+def auto_expose_hybrid(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
     # 1. 下采样
     sample = get_subsampled_view(img_linear)
     
@@ -264,18 +268,20 @@ def auto_expose_hybrid(img_linear: np.ndarray, source_colorspace, target_gray: f
     
     if potential_peak > max_allowed_peak:
         limited_gain = max_allowed_peak / p99
-        logger(f"  🛡️  [Auto Exposure] Hybrid limited. (Desired: {base_gain:.2f} -> Actual: {limited_gain:.2f})")
+        if logger:
+            logger.info(f"  🛡️  [Auto Exposure] Hybrid limited. (Desired: {base_gain:.2f} -> Actual: {limited_gain:.2f})")
         gain = limited_gain
     else:
         gain = base_gain
         
     gain = np.clip(gain, 0.1, 100.0)
-    logger(f"  ⚖️  [Auto Exposure] Hybrid Gain: {gain:.4f}")
+    if logger:
+        logger.info(f"  ⚖️  [Auto Exposure] Hybrid Gain: {gain:.4f}")
     
     apply_gain_inplace(img_linear, float(gain))
     return img_linear
 
-def auto_expose_matrix(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: callable = print) -> np.ndarray:
+def auto_expose_matrix(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
     """
     高级评价测光 (模拟矩阵测光)。
     1. 将图像划分为 7x7 网格。
@@ -343,18 +349,20 @@ def auto_expose_matrix(img_linear: np.ndarray, source_colorspace, target_gray: f
     
     if potential_peak > max_allowed_peak:
         limited_gain = max_allowed_peak / p99
-        logger(f"  🛡️  [Auto Exposure] Matrix limited. (Desired: {gain:.2f} -> Actual: {limited_gain:.2f})")
+        if logger:
+            logger.info(f"  🛡️  [Auto Exposure] Matrix limited. (Desired: {gain:.2f} -> Actual: {limited_gain:.2f})")
         gain = limited_gain
 
     gain = np.clip(gain, 0.1, 100.0)
-    logger(f"  🤖 [Auto Exposure] Matrix Gain: {gain:.4f}")
+    if logger:
+        logger.info(f"  🤖 [Auto Exposure] Matrix Gain: {gain:.4f}")
     
     apply_gain_inplace(img_linear, float(gain))
     return img_linear
 
 # ----------------- 镜头校正 (保持逻辑，优化注释) -----------------
 
-def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Optional[str] = None, logger: callable = print, **kwargs) -> np.ndarray:
+def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Optional[str] = None, **kwargs) -> np.ndarray:
     """
     镜头校正通常需要几何变换，很难完全 In-Place。
     这是整个流程中少数几个必然会产生内存拷贝的地方。
@@ -366,14 +374,14 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
     
     # 必要的 key 检查
     if not params.get('camera_model') or not params.get('lens_model'):
-        logger("  ⚠️  [Lens] Missing info, skipping.")
+        logger.warning("  ⚠️  [Lens] Missing info, skipping.")
         return image
     
     if not params.get('focal_length') or not params.get('aperture'):
-        logger("  ⚠️  [Lens] Missing optical info, skipping.")
+        logger.warning("  ⚠️  [Lens] Missing optical info, skipping.")
         return image
     
-    logger(f"  🧬 [Lens] {params.get('camera_maker')} {params.get('camera_model')} + {params.get('lens_model')}")
+    logger.info(f"  🧬 [Lens] {params.get('camera_maker')} {params.get('camera_model')} + {params.get('lens_model')}")
     
     try:
         # lensfun_wrapper 内部通常会调用 cv2.remap 或 scipy.map_coordinates
@@ -381,7 +389,6 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
         corrected = lf.apply_lens_correction(
             image=image,
             custom_db_path=custom_db_path,
-            logger=logger,
             **params # 传递所有提取到的参数
         )
         
@@ -390,10 +397,10 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
         return corrected
         
     except Exception as e:
-        logger(f"  ❌ [Lens Error] {e}")
+        logger.error(f"  ❌ [Lens Error] {e}")
         return image # 失败则返回原图
 
-def extract_lens_exif(raw: rawpy.RawPy, logger: callable = print) -> dict:
+def extract_lens_exif(raw: rawpy.RawPy) -> dict:
     """使用 rawpy 对象从 RAW 文件中提取 EXIF 和镜头信息。"""
     result = {}
     try:
@@ -406,7 +413,7 @@ def extract_lens_exif(raw: rawpy.RawPy, logger: callable = print) -> dict:
         result['aperture'] = raw.other_params.aperture
             
     except Exception as e:
-        logger(f"  ❌ [EXIF Error] {e}")
+        logger.error(f"  ❌ [EXIF Error] {e}")
     
     # 过滤掉 None 值，防止下游出错
     return {k: v for k, v in result.items() if v is not None}

@@ -113,5 +113,10 @@
     "no_update": "Up to Date",
     "no_update_message": "You are running the latest version {version}.",
     "update_check_failed": "Update Check Failed",
-    "update_check_error": "Failed to check for updates: {error}"
+    "update_check_error": "Failed to check for updates: {error}",
+    "export_logs": "Export Logs",
+    "export_logs_success": "Logs Exported Successfully",
+    "export_logs_failed": "Failed to Export Logs",
+    "logs_saved_to": "Logs saved to: {path}",
+    "no_logs_found": "No log files found"
 }

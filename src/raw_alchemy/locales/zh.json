@@ -113,5 +113,10 @@
     "no_update": "已是最新版本",
     "no_update_message": "当前版本 {version} 已是最新版本。",
     "update_check_failed": "检查更新失败",
-    "update_check_error": "无法检查更新: {error}"
+    "update_check_error": "无法检查更新: {error}",
+    "export_logs": "导出日志",
+    "export_logs_success": "日志导出成功",
+    "export_logs_failed": "日志导出失败",
+    "logs_saved_to": "日志已保存至: {path}",
+    "no_logs_found": "未找到日志文件"
 }
