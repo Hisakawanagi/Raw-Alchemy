@@ -108,7 +108,7 @@ def _save_jpeg_or_other(img: np.ndarray, output_path: str, file_ext: str, logger
 
 
 def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
-    """将 EXIF 数据写入输出文件"""
+    """将 EXIF 数据写入输出文件（排除旋转信息）"""
     try:
         # 读取源文件的 EXIF 数据
         exif_data = exif_img.read_exif()
@@ -118,8 +118,14 @@ def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
         # 打开输出文件并写入 EXIF 数据
         output_img = pyexiv2.Image(output_path)
         
-        # 写入 EXIF 数据
+        # 写入 EXIF 数据，但排除旋转相关标签
         if exif_data:
+            # 移除旋转相关的 EXIF 标签
+            rotation_tags = ['Exif.Image.Orientation']
+            for tag in rotation_tags:
+                if tag in exif_data:
+                    del exif_data[tag]
+            
             output_img.modify_exif(exif_data)
         
         # 写入 IPTC 数据
@@ -131,7 +137,7 @@ def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
             output_img.modify_xmp(xmp_data)
         
         output_img.close()
-        logger.info("    ✅ EXIF data written successfully")
+        logger.info("    ✅ EXIF data written successfully (rotation info excluded)")
         
     except Exception as e:
         logger.warning(f"    ⚠️  Failed to write EXIF data: {e}")

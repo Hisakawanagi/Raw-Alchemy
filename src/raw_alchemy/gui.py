@@ -579,13 +579,12 @@ class HistogramWidget(QWidget):
             # 使用更激进的采样率提升性能 (8x vs 4x)
             self.hist_data = utils.compute_histogram_fast(data, bins=100, sample_rate=4)
             self.update()  # 使用update()而非repaint(),让Qt优化重绘
-        except (RuntimeError, OSError, ValueError, TypeError) as e:
+        except (RuntimeError, ValueError, TypeError) as e:
             # 捕获常见的数组操作错误，静默处理
             # 这些错误通常是由于跨线程数据竞争导致的
             pass
         except Exception as e:
             # 其他未知错误，记录但不崩溃
-            import traceback
             logger.error(f"Histogram update error: {type(e).__name__}: {e}")
 
     def paintEvent(self, event):
@@ -598,38 +597,89 @@ class HistogramWidget(QWidget):
         w = self.width()
         h = self.height()
         
+        # 填充深色背景（加色混合模式在深色背景下效果最佳）
+        painter.fillRect(self.rect(), QColor(20, 20, 20))
+        
         # 检查是否有有效数据
         try:
-            max_val = max([np.max(hist) for hist in self.hist_data]) if self.hist_data else 1
-            if max_val == 0 or max_val < 1e-10:
-                max_val = 1
+            # 策略1：忽略两端极值 + 对数缩放
+            # 这样可以避免过曝/欠曝区域的极高峰值压缩中间调细节
+            
+            # 对每个通道分别计算显示用的最大值（忽略首尾bin）
+            display_max_vals = []
+            for hist in self.hist_data:
+                if len(hist) > 2:
+                    # 忽略第0项（纯黑）和最后一项（纯白），在中间找最大值
+                    inner_max = np.max(hist[1:-1])
+                    display_max_vals.append(inner_max if inner_max > 0 else 1)
+                else:
+                    display_max_vals.append(np.max(hist) if len(hist) > 0 else 1)
+            
+            # 使用所有通道中的最大值作为统一缩放基准
+            display_max = max(display_max_vals) if display_max_vals else 1
+            if display_max == 0 or display_max < 1e-10:
+                display_max = 1
+            
+            # 启用对数缩放来进一步压缩动态范围
+            log_scale = True
+            
+            # 预计算对数缩放的分母（避免循环中重复计算）
+            if log_scale:
+                log_max_height = np.log1p(display_max)
+            else:
+                log_max_height = display_max
+            
         except Exception as e:
-            logger.error(f"Error computing max_val: {e}")
+            logger.error(f"Error computing display_max: {e}")
             return
         
-        colors = [QColor(255, 50, 50, 180), QColor(50, 255, 50, 180), QColor(50, 50, 255, 180)]
+        # RGB颜色定义（降低Alpha以获得更好的混合效果）
+        colors = [
+            QColor(255, 0, 0, 160),    # 红色
+            QColor(0, 255, 0, 160),    # 绿色
+            QColor(0, 0, 255, 160)     # 蓝色
+        ]
+        
+        # 使用加色混合模式（Additive Blending）
+        # 红+绿=黄，红+蓝=洋红，绿+蓝=青，红+绿+蓝=白
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
         
         for i, hist in enumerate(self.hist_data):
             if len(hist) == 0:
                 continue
-                
-            path_color = colors[i]
+            
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(path_color)
+            painter.setBrush(colors[i])
             
             bin_w = w / len(hist)
             
-            # Draw bars (or polygon)
+            # Draw polygon
             from PySide6.QtGui import QPolygonF
             from PySide6.QtCore import QPointF
             
-            points = [QPointF(0, h)]
+            points = [QPointF(0, h)]  # 起始点：左下角
+            
             for j, val in enumerate(hist):
                 x = j * bin_w
-                y = h - (float(val) / max_val * h)
+                
+                # 计算比例
+                if log_scale:
+                    current_h = np.log1p(float(val))
+                    ratio = current_h / log_max_height
+                else:
+                    ratio = float(val) / display_max
+                
+                # [关键] 截断到 [0, 1] 范围
+                # index 0 和 255 的值可能远大于 display_max，会被截断为1.0（顶格）
+                # 这正是我们想要的效果：显示溢出，同时保留中间调细节
+                ratio = min(1.0, max(0.0, ratio))
+                
+                # 计算 Y 坐标（Qt坐标系：0在顶部，h在底部）
+                y = h - (ratio * h)
+                
                 points.append(QPointF(x, y))
-            points.append(QPointF(w, h))
             
+            points.append(QPointF(w, h))  # 结束点：右下角
             painter.drawPolygon(QPolygonF(points))
 
 
@@ -731,6 +781,8 @@ class InspectorPanel(ScrollArea):
             # Trigger parameter change - will be debounced by 100ms timer in on_param_changed
             self._on_param_change()
         
+        # 保存回调函数引用，以便后续临时断开连接
+        self.exp_slider_callback = update_exp_label
         self.exp_slider.valueChanged.connect(update_exp_label)
         
         exp_layout.addWidget(self.auto_exp_radio)
@@ -2066,14 +2118,20 @@ class MainWindow(FluentWindow):
         # Update auto EV value if in auto mode
         if self.right_panel.auto_exp_radio.isChecked():
             self.right_panel.auto_ev_value = applied_ev
-            # Update display without triggering param change
-            self.right_panel.exp_slider.blockSignals(True)
+            # 临时断开valueChanged信号连接，避免触发参数变化
+            try:
+                self.right_panel.exp_slider.valueChanged.disconnect(self.right_panel.exp_slider_callback)
+            except:
+                pass  # 如果已经断开则忽略
+            
+            # 更新滑条值（此时不会触发信号）
             self.right_panel.exp_slider.setValue(int(applied_ev * 10))
-            self.right_panel.exp_slider.update()  # Force immediate visual refresh
-            self.right_panel.exp_slider.blockSignals(False)
-            # Manually update label since blockSignals prevented valueChanged
+            # 手动更新标签
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: {applied_ev:+.1f}")
-            logger.debug(f"[Result] Updated auto EV display to {applied_ev:+.1f} (signals blocked)")
+            
+            # 重新连接信号
+            self.right_panel.exp_slider.valueChanged.connect(self.right_panel.exp_slider_callback)
+            logger.debug(f"[Result] Updated auto EV display to {applied_ev:+.1f} (signal temporarily disconnected)")
         
         # Display
         display_pixmap = self.current.get_display(self.preview_lbl.size())
@@ -2425,6 +2483,15 @@ class MainWindow(FluentWindow):
         ext = os.path.splitext(output_path)[1].lower().replace('.', '')
         if ext not in ['jpg', 'heif', 'tif', 'tiff']: ext = 'jpg'
         
+        # 确定曝光值：无论是手动还是自动模式，都使用界面上的值
+        # 这样可以确保导出的图像与预览一致
+        if p['exposure_mode'] == 'Manual':
+            # 手动模式：使用滑条的值
+            export_exposure = p['exposure']
+        else:
+            # 自动模式：使用已经计算好的auto_ev_value
+            export_exposure = self.right_panel.auto_ev_value
+        
         # Create a thread to run orchestrator (it blocks otherwise)
         # Using a simple QThread wrapper
         
@@ -2438,7 +2505,7 @@ class MainWindow(FluentWindow):
                         output_path=output_path,
                         log_space=p['log_space'],
                         lut_path=p['lut_path'],
-                        exposure=p['exposure'] if p['exposure_mode'] == 'Manual' else None,
+                        exposure=export_exposure,  # 始终使用界面上的曝光值
                         lens_correct=p['lens_correct'],
                         custom_db_path=p['custom_db_path'],
                         metering_mode=p.get('metering_mode', 'matrix'),
