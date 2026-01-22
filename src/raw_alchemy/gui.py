@@ -374,9 +374,9 @@ class ImageProcessor(QThread):
             self.exif_data = None
             self.current_path = path
         
+        self.exif_data, _ = utils.extract_lens_exif(path)
+
         with rawpy.imread(path) as raw:
-            self.exif_data = utils.extract_lens_exif(raw)
-            
             raw_post = raw.postprocess(
                 gamma=(1, 1),
                 no_auto_bright=True,

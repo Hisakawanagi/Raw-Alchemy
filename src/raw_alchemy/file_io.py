@@ -9,11 +9,13 @@ from PIL import Image
 import pillow_heif
 from typing import Optional
 from raw_alchemy.logger import Logger
+import pyexiv2
 
 def save_image(
     img: np.ndarray,
     output_path: str,
-    logger: Optional[Logger] = None
+    logger: Optional[Logger] = None,
+    exif_img: Optional[pyexiv2.Image] = None
 ) -> bool:
     """
     保存图像到指定路径，根据扩展名自动选择格式
@@ -22,6 +24,7 @@ def save_image(
         img: 图像数据 (float32, 0.0-1.0)
         output_path: 输出路径
         logger: 日志处理器
+        exif_img: pyexiv2 图像对象，用于复制 EXIF 数据
     
     Returns:
         bool: 是否保存成功
@@ -42,6 +45,10 @@ def save_image(
             _save_heif(img, output_path, logger)
         else:
             _save_jpeg_or_other(img, output_path, file_ext, logger)
+        
+        # 写入 EXIF 数据
+        if exif_img:
+            _write_exif(output_path, exif_img, logger)
         
         logger.info(f"  ✅ Saved: {output_path}")
         return True
@@ -98,3 +105,33 @@ def _save_jpeg_or_other(img: np.ndarray, output_path: str, file_ext: str, logger
         }
     
     Image.fromarray(output_image_uint8).save(output_path, **save_params)
+
+
+def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
+    """将 EXIF 数据写入输出文件"""
+    try:
+        # 读取源文件的 EXIF 数据
+        exif_data = exif_img.read_exif()
+        iptc_data = exif_img.read_iptc()
+        xmp_data = exif_img.read_xmp()
+        
+        # 打开输出文件并写入 EXIF 数据
+        output_img = pyexiv2.Image(output_path)
+        
+        # 写入 EXIF 数据
+        if exif_data:
+            output_img.modify_exif(exif_data)
+        
+        # 写入 IPTC 数据
+        if iptc_data:
+            output_img.modify_iptc(iptc_data)
+        
+        # 写入 XMP 数据
+        if xmp_data:
+            output_img.modify_xmp(xmp_data)
+        
+        output_img.close()
+        logger.info("    ✅ EXIF data written successfully")
+        
+    except Exception as e:
+        logger.warning(f"    ⚠️  Failed to write EXIF data: {e}")

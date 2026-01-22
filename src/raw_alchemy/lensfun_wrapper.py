@@ -369,7 +369,7 @@ class LensfunDatabase:
         maker_b = maker.encode('utf-8') if maker else None
         model_b = model.encode('utf-8')
         
-        cameras = _lensfun.lf_db_find_cameras_ext(self.db, maker_b, model_b, 0)
+        cameras = _lensfun.lf_db_find_cameras_ext(self.db, maker_b, model_b, 1)
         if cameras and cameras[0]:
             return cameras[0]
         return None

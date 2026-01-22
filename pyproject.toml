@@ -30,7 +30,8 @@ dependencies = [
     "PySide6-Fluent-Widgets",
     "Send2Trash",
     "packaging",
-    "loguru"
+    "loguru",
+    "pyexiv2"
 ]
 
 [project.urls]

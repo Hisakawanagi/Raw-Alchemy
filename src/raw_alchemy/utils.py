@@ -1,10 +1,11 @@
 import os
 import sys
-from typing import Optional
+from typing import Optional, Tuple
 import rawpy
 import numpy as np
 from loguru import logger
 from raw_alchemy import lensfun_wrapper as lf
+import pyexiv2
 try:
     from raw_alchemy.math_ops_ext import (
         apply_matrix_inplace,
@@ -168,198 +169,6 @@ def apply_highlight_shadow(img_linear, highlight=0.0, shadow=0.0, colourspace=No
     apply_highlight_shadow_inplace(img_linear, float(h_val), float(s_val), luma_coeffs)
     return img_linear
 
-# ----------------- 测光函数 (全部改为采样 + In-Place) -----------------
-
-def auto_expose_center_weighted(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
-    # 1. 下采样 (速度提升 50-100 倍)
-    sample = get_subsampled_view(img_linear)
-    
-    # 2. 在小图上计算亮度 (不再转换整个 45MP 大图)
-    coeffs = get_luminance_coeffs(source_colorspace)
-    # 点乘计算亮度: sample @ coeffs.T
-    luminance = np.dot(sample, coeffs)
-    
-    h, w = luminance.shape
-    
-    # 3. 计算权重 (在小图上计算，内存忽略不计)
-    y, x = np.ogrid[:h, :w]
-    center_y, center_x = h / 2, w / 2
-    sigma = min(h, w) / 2
-    dist_sq = (x - center_x)**2 + (y - center_y)**2
-    weights = np.exp(-dist_sq / (2 * sigma**2))
-    
-    weighted_avg_lum = np.average(luminance, weights=weights)
-    
-    if weighted_avg_lum < 1e-6:
-        gain = 1.0
-    else:
-        gain = target_gray / weighted_avg_lum
-
-    gain = np.clip(gain, 0.1, 100.0)
-    if logger:
-        logger.info(f"  ⚖️  [Auto Exposure] Center-Weighted Gain: {gain:.4f}")
-    
-    # 4. 原位应用增益到大图
-    # img_linear *= gain # Numpy 写法
-    apply_gain_inplace(img_linear, float(gain)) # Numba 写法 (稍微更省内存)
-    return img_linear
-
-def auto_expose_highlight_safe(img_linear: np.ndarray, clip_threshold: float = 1.0, logger: Optional[callable] = None) -> np.ndarray:
-    # 1. 下采样
-    sample = get_subsampled_view(img_linear)
-    
-    # 2. 在小图上找 Max
-    max_vals = np.max(sample, axis=2)
-    high_percentile = np.percentile(max_vals, 99.0)
-    
-    target_high = 0.9  
-    if high_percentile < 1e-6:
-        gain = 1.0
-    else:
-        gain = target_high / high_percentile
-        
-    if logger:
-        logger.info(f"  🛡️  [Auto Exposure] Highlight Safe Gain: {gain:.4f}")
-    apply_gain_inplace(img_linear, float(gain))
-    return img_linear
-
-def auto_expose_linear(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
-    # 1. 下采样
-    sample = get_subsampled_view(img_linear)
-    
-    # 2. 计算亮度
-    coeffs = get_luminance_coeffs(source_colorspace)
-    luminance = np.dot(sample, coeffs)
-    
-    # 3. 统计
-    avg_log_lum = np.mean(np.log(luminance + 1e-6))
-    avg_lum = np.exp(avg_log_lum)
-    
-    if avg_lum < 0.0001: 
-        gain = 1.0 
-    else:
-        gain = target_gray / avg_lum
-
-    gain = np.clip(gain, 1.0, 50.0)
-    if logger:
-        logger.info(f"  ⚖️  [Auto Exposure] Avg Gain: {gain:.4f}")
-    
-    apply_gain_inplace(img_linear, float(gain))
-    return img_linear
-
-def auto_expose_hybrid(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
-    # 1. 下采样
-    sample = get_subsampled_view(img_linear)
-    
-    # 2. 计算亮度
-    coeffs = get_luminance_coeffs(source_colorspace)
-    luminance = np.dot(sample, coeffs)
-    
-    avg_log_lum = np.mean(np.log(luminance + 1e-6))
-    avg_lum = np.exp(avg_log_lum)
-    base_gain = target_gray / (avg_lum + 1e-6)
-    
-    # 3. 检查高光 (在采样图上检查即可)
-    max_vals = np.max(sample, axis=2)
-    p99 = np.percentile(max_vals, 99.0)
-    
-    potential_peak = p99 * base_gain
-    max_allowed_peak = 6.0 
-    
-    if potential_peak > max_allowed_peak:
-        limited_gain = max_allowed_peak / p99
-        if logger:
-            logger.info(f"  🛡️  [Auto Exposure] Hybrid limited. (Desired: {base_gain:.2f} -> Actual: {limited_gain:.2f})")
-        gain = limited_gain
-    else:
-        gain = base_gain
-        
-    gain = np.clip(gain, 0.1, 100.0)
-    if logger:
-        logger.info(f"  ⚖️  [Auto Exposure] Hybrid Gain: {gain:.4f}")
-    
-    apply_gain_inplace(img_linear, float(gain))
-    return img_linear
-
-def auto_expose_matrix(img_linear: np.ndarray, source_colorspace, target_gray: float = 0.18, logger: Optional[callable] = None) -> np.ndarray:
-    """
-    高级评价测光 (模拟矩阵测光)。
-    1. 将图像划分为 7x7 网格。
-    2. 计算每个网格的平均亮度。
-    3. 基于位置、亮度和与中心的关系，为每个网格分配权重。
-    4. 计算加权平均亮度并确定曝光增益。
-    """
-    # 1. 下采样以提高性能
-    sample = get_subsampled_view(img_linear)
-    h, w, _ = sample.shape
-    
-    # 2. 计算亮度图
-    coeffs = get_luminance_coeffs(source_colorspace)
-    luminance = np.dot(sample, coeffs)
-    
-    # 3. 定义网格
-    grid_size = 7
-    grid_h, grid_w = h // grid_size, w // grid_size
-    
-    # 4. 计算每个网格的平均亮度和权重
-    grid_lums = np.zeros((grid_size, grid_size))
-    for i in range(grid_size):
-        for j in range(grid_size):
-            cell = luminance[i*grid_h:(i+1)*grid_h, j*grid_w:(j+1)*grid_w]
-            if cell.size > 0:
-                grid_lums[i, j] = np.mean(cell)
-
-    # 5. 智能加权
-    weights = np.ones((grid_size, grid_size))
-    
-    # 5.1 中心偏置 (高斯权重)
-    y, x = np.ogrid[:grid_size, :grid_size]
-    center_y, center_x = (grid_size - 1) / 2.0, (grid_size - 1) / 2.0
-    dist_sq = (x - center_x)**2 + (y - center_y)**2
-    # sigma 稍大，权重分布更平滑
-    sigma = grid_size / 2.5
-    center_bias = np.exp(-dist_sq / (2 * sigma**2))
-    weights *= (1 + center_bias * 1.5) # 中心权重最高为 2.5 倍
-
-    # 5.2 高光抑制
-    # 亮度高于 90% 分位数的区域，权重降低
-    lum_percentile_90 = np.percentile(grid_lums, 90)
-    highlight_zones = grid_lums > lum_percentile_90
-    weights[highlight_zones] *= 0.2 # 高光区域权重打 2 折
-
-    # 5.3 暗部关注
-    # 亮度低于 10% 分位数的区域，权重轻微提升
-    lum_percentile_10 = np.percentile(grid_lums, 10)
-    shadow_zones = grid_lums < lum_percentile_10
-    weights[shadow_zones] *= 1.2 # 暗部区域权重提升 20%
-
-    # 6. 计算最终加权平均亮度
-    weighted_avg_lum = np.average(grid_lums, weights=weights)
-    
-    if weighted_avg_lum < 1e-6:
-        gain = 1.0
-    else:
-        gain = target_gray / weighted_avg_lum
-
-    # 7. 与 Hybrid 类似的保护性削减
-    max_vals = np.max(sample, axis=2)
-    p99 = np.percentile(max_vals, 99.0)
-    potential_peak = p99 * gain
-    max_allowed_peak = 6.0
-    
-    if potential_peak > max_allowed_peak:
-        limited_gain = max_allowed_peak / p99
-        if logger:
-            logger.info(f"  🛡️  [Auto Exposure] Matrix limited. (Desired: {gain:.2f} -> Actual: {limited_gain:.2f})")
-        gain = limited_gain
-
-    gain = np.clip(gain, 0.1, 100.0)
-    if logger:
-        logger.info(f"  🤖 [Auto Exposure] Matrix Gain: {gain:.4f}")
-    
-    apply_gain_inplace(img_linear, float(gain))
-    return img_linear
-
 # ----------------- 镜头校正 (保持逻辑，优化注释) -----------------
 
 def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Optional[str] = None, **kwargs) -> np.ndarray:
@@ -374,7 +183,7 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
     
     # 必要的 key 检查
     if not params.get('camera_model') or not params.get('lens_model'):
-        logger.warning("  ⚠️  [Lens] Missing info, skipping.")
+        logger.warning("  ⚠️  [Lens] Missing camera model info, skipping.")
         return image
     
     if not params.get('focal_length') or not params.get('aperture'):
@@ -388,8 +197,18 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
         # 这必然返回新图像
         corrected = lf.apply_lens_correction(
             image=image,
+            camera_maker=params.get('camera_maker'),
+            camera_model=params.get('camera_model'),
+            lens_maker=params.get('lens_maker'),
+            lens_model=params.get('lens_model'),
+            focal_length=params.get('focal_length'),
+            aperture=params.get('aperture'),
+            crop_factor=params.get('crop_factor'),
+            correct_distortion=params.get('correct_distortion', True),
+            correct_tca=params.get('correct_tca', True),
+            correct_vignetting=params.get('correct_vignetting', True),
+            distance=params.get('distance', 1000.0),
             custom_db_path=custom_db_path,
-            **params # 传递所有提取到的参数
         )
         
         # 显式帮助 GC (虽然 Python 会自动处理，但在大内存压力下 explicit is better)
@@ -400,20 +219,77 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
         logger.error(f"  ❌ [Lens Error] {e}")
         return image # 失败则返回原图
 
-def extract_lens_exif(raw: rawpy.RawPy) -> dict:
-    """使用 rawpy 对象从 RAW 文件中提取 EXIF 和镜头信息。"""
+def extract_lens_exif(raw_path: str) -> Tuple[dict, pyexiv2.Image]:
+    """
+    使用 pyexiv2 从 RAW 文件中提取 EXIF 和镜头信息。
+    
+    Args:
+        raw_path: RAW 文件路径
+        
+    Returns:
+        Tuple[dict, pyexiv2.Image]: (镜头校正所需的参数字典, pyexiv2 图像对象用于后续写入)
+    """
     result = {}
+    exif_img = None
+    
     try:
-        # 使用新的 rawpy 参数对象 (rawpy >= 0.20.0)
-        result['camera_maker'] = raw.camera_params.make
-        result['camera_model'] = raw.camera_params.model
-        result['lens_maker'] = raw.lens_params.make
-        result['lens_model'] = raw.lens_params.model
-        result['focal_length'] = raw.other_params.focal_len
-        result['aperture'] = raw.other_params.aperture
-            
+        # 使用 pyexiv2 读取 EXIF 数据
+        exif_img = pyexiv2.Image(raw_path)
+        exif_data = exif_img.read_exif()
+        
+        # 提取镜头校正所需的信息
+        # 相机制造商和型号
+        result['camera_maker'] = exif_data.get('Exif.Image.Make', '').strip()
+        result['camera_model'] = exif_data.get('Exif.Image.Model', '').strip()
+        
+        # 镜头信息 (不同厂商的标签可能不同)
+        lens_model = (
+            exif_data.get('Exif.Photo.LensModel') or
+            exif_data.get('Exif.Canon.LensModel') or
+            exif_data.get('Exif.Nikon3.Lens') or
+            exif_data.get('Exif.Panasonic.LensType') or
+            exif_data.get('Exif.OlympusEq.LensModel') or
+            ''
+        )
+        result['lens_model'] = lens_model.strip() if lens_model else ''
+        
+        # 镜头制造商
+        lens_maker = exif_data.get('Exif.Photo.LensMake', '').strip()
+        result['lens_maker'] = lens_maker if lens_maker else ''
+        
+        # 焦距
+        focal_length_str = exif_data.get('Exif.Photo.FocalLength', '')
+        if focal_length_str:
+            try:
+                # 焦距通常是 "50/1" 这样的分数格式
+                if '/' in str(focal_length_str):
+                    num, denom = map(float, str(focal_length_str).split('/'))
+                    result['focal_length'] = num / denom if denom != 0 else 0
+                else:
+                    result['focal_length'] = float(focal_length_str)
+            except (ValueError, ZeroDivisionError):
+                pass
+        
+        # 光圈
+        aperture_str = exif_data.get('Exif.Photo.FNumber', '')
+        if aperture_str:
+            try:
+                # 光圈通常是 "28/10" 这样的分数格式
+                if '/' in str(aperture_str):
+                    num, denom = map(float, str(aperture_str).split('/'))
+                    result['aperture'] = num / denom if denom != 0 else 0
+                else:
+                    result['aperture'] = float(aperture_str)
+            except (ValueError, ZeroDivisionError):
+                pass
+                
     except Exception as e:
         logger.error(f"  ❌ [EXIF Error] {e}")
+        if exif_img:
+            exif_img.close()
+            exif_img = None
     
-    # 过滤掉 None 值，防止下游出错
-    return {k: v for k, v in result.items() if v is not None}
+    # 过滤掉空值，防止下游出错
+    result = {k: v for k, v in result.items() if v}
+    
+    return result, exif_img
