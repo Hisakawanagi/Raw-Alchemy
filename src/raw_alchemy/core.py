@@ -176,7 +176,7 @@ def process_image(
 
     # --- Step 6: 保存（使用模块化的文件保存功能）---
     logger.info(f"  💾 Saving to {os.path.basename(output_path)}...")
-    save_image(img, output_path, logger, exif_img)
+    save_image(img, output_path, logger, exif_img=exif_img, exif_dict=exif_data)
     
     # --- 最终清理 ---
     del img

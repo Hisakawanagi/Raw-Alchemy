@@ -15,7 +15,8 @@ def save_image(
     img: np.ndarray,
     output_path: str,
     logger: Optional[Logger] = None,
-    exif_img: Optional[pyexiv2.Image] = None
+    exif_img: Optional[pyexiv2.Image] = None,
+    exif_dict: Optional[dict] = None
 ) -> bool:
     """
     保存图像到指定路径，根据扩展名自动选择格式
@@ -24,7 +25,8 @@ def save_image(
         img: 图像数据 (float32, 0.0-1.0)
         output_path: 输出路径
         logger: 日志处理器
-        exif_img: pyexiv2 图像对象，用于复制 EXIF 数据
+        exif_img: pyexiv2 图像对象，用于复制完整 EXIF 数据（优先使用）
+        exif_dict: 从 rawpy 提取的 EXIF 数据字典，当 exif_img 不可用时使用
     
     Returns:
         bool: 是否保存成功
@@ -48,7 +50,11 @@ def save_image(
         
         # 写入 EXIF 数据
         if exif_img:
+            # 优先使用完整的 EXIF 数据（从 pyexiv2.Image）
             _write_exif(output_path, exif_img, logger)
+        elif exif_dict:
+            # 降级方案：从 rawpy 数据构造基本 EXIF
+            _write_exif_from_dict(output_path, exif_dict, logger)
         
         logger.info(f"  ✅ Saved: {output_path}")
         return True
@@ -141,3 +147,57 @@ def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
         
     except Exception as e:
         logger.warning(f"    ⚠️  Failed to write EXIF data: {e}")
+
+
+def _write_exif_from_dict(output_path: str, exif_dict: dict, logger: Logger):
+    """
+    从 rawpy 提取的数据字典构造并写入基本 EXIF 标签
+    
+    Args:
+        output_path: 输出文件路径
+        exif_dict: 包含相机和镜头信息的字典 (从 utils.extract_lens_exif 返回)
+        logger: 日志处理器
+    """
+    try:
+        # 打开输出文件
+        output_img = pyexiv2.Image(output_path)
+        
+        # 构造基本的 EXIF 数据
+        basic_exif = {}
+        
+        # 相机信息
+        if exif_dict.get('camera_maker'):
+            basic_exif['Exif.Image.Make'] = exif_dict['camera_maker']
+        
+        if exif_dict.get('camera_model'):
+            basic_exif['Exif.Image.Model'] = exif_dict['camera_model']
+        
+        # 镜头信息
+        if exif_dict.get('lens_model'):
+            basic_exif['Exif.Photo.LensModel'] = exif_dict['lens_model']
+        
+        if exif_dict.get('lens_maker'):
+            basic_exif['Exif.Photo.LensMake'] = exif_dict['lens_maker']
+        
+        # 拍摄参数
+        if exif_dict.get('focal_length'):
+            # 将浮点数转换为分数格式（例如 50.0 -> "50/1"）
+            focal_mm = exif_dict['focal_length']
+            basic_exif['Exif.Photo.FocalLength'] = f"{int(focal_mm * 10)}/10"
+        
+        if exif_dict.get('aperture'):
+            # 光圈值（例如 2.8 -> "28/10"）
+            aperture = exif_dict['aperture']
+            basic_exif['Exif.Photo.FNumber'] = f"{int(aperture * 10)}/10"
+        
+        # 写入 EXIF 数据
+        if basic_exif:
+            output_img.modify_exif(basic_exif)
+            output_img.close()
+            logger.info(f"    ✅ Basic EXIF written from rawpy data ({len(basic_exif)} tags)")
+        else:
+            output_img.close()
+            logger.warning("    ⚠️  No valid EXIF data to write from rawpy")
+        
+    except Exception as e:
+        logger.warning(f"    ⚠️  Failed to write EXIF from dict: {e}")
