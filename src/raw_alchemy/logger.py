@@ -21,13 +21,14 @@ def get_log_file_path() -> str:
 # 配置全局 loguru logger
 logger.remove()  # 移除默认处理器
 
-# 添加控制台输出
-logger.add(
-    sys.stderr,
-    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-    level="INFO",  # 控制台只显示 INFO 及以上级别，DEBUG 日志只写入文件
-    colorize=True
-)
+# 添加控制台输出（仅在有stderr时，如非GUI模式）
+if sys.stderr is not None:
+    logger.add(
+        sys.stderr,
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+        level="INFO",  # 控制台只显示 INFO 及以上级别，DEBUG 日志只写入文件
+        colorize=True
+    )
 
 # 添加文件输出（自动轮转，保留最近7天）
 logger.add(
