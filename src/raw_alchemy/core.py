@@ -46,9 +46,8 @@ def process_image(
     logger.info(f"  🔹 [Step 1] Decoding RAW...")
     
     # 提取 EXIF (用于镜头校正和后续写入)
-    exif_data, exif_img = utils.extract_lens_exif(raw_path)
-    
     with rawpy.imread(raw_path) as raw:
+        exif_data, exif_img = utils.extract_lens_exif(raw_path, raw)
         # 解码: 必须使用 16-bit 以保留 Log 转换所需的动态范围
         prophoto_linear = raw.postprocess(
             gamma=(1, 1),

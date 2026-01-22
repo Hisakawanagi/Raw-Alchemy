@@ -16,7 +16,8 @@ try:
         apply_gain_inplace,
         linear_to_srgb_inplace,
         bt709_to_srgb_inplace,
-        compute_histogram_channel
+        compute_histogram_channel,
+        compute_waveform_channel
     )
 except ImportError:
     logger.error("Warning: AOT module 'math_ops_ext' not found. Please run 'python src/raw_alchemy/math_ops.py' to compile it.")
@@ -69,6 +70,49 @@ def compute_histogram_fast(img_array, bins=100, sample_rate=4):
         hist_data.append(hist.astype(np.float64))
     
     return hist_data
+
+
+def compute_waveform_fast(img_array, bins=100, sample_rate=4):
+    """
+    快速计算亮度波形图数据（使用 numba 加速）
+    类似达芬奇的波形图，显示图像的亮度分布
+    
+    Args:
+        img_array: HxWx3 numpy array with float values in range [0, 1]
+        bins: number of vertical bins (亮度级别)
+        sample_rate: horizontal subsample rate (水平采样率)
+    
+    Returns:
+        numpy array of shape [sampled_width, bins] - 亮度波形数据
+    """
+    if len(img_array.shape) != 3 or img_array.shape[2] != 3:
+        return None
+    
+    h, w, c = img_array.shape
+    
+    # 水平方向采样以提高性能
+    sampled_width = w // sample_rate
+    if sampled_width == 0:
+        sampled_width = 1
+    
+    # 计算亮度（使用 Rec.709 系数）
+    # Y = 0.2126*R + 0.7152*G + 0.0722*B
+    luma = (img_array[:, :, 0] * 0.2126 +
+            img_array[:, :, 1] * 0.7152 +
+            img_array[:, :, 2] * 0.0722).astype(np.float32)
+    
+    # 创建波形输出数组
+    waveform = np.zeros((sampled_width, bins), dtype=np.float32)
+    
+    # 使用numba加速的计算函数
+    compute_waveform_channel(luma, waveform, bins, sample_rate)
+    
+    # 归一化
+    max_val = np.max(waveform)
+    if max_val > 0:
+        waveform = waveform / max_val
+    
+    return waveform
 
 # =========================================================
 # 辅助计算函数 (用于测光)
@@ -219,9 +263,10 @@ def apply_lens_correction(image: np.ndarray, exif_data: dict, custom_db_path: Op
         logger.error(f"  ❌ [Lens Error] {e}")
         return image # 失败则返回原图
 
-def extract_lens_exif(raw_path: str) -> Tuple[dict, pyexiv2.Image]:
+def extract_lens_exif(raw_path: str, raw) -> Tuple[dict, pyexiv2.Image]:
     """
     使用 pyexiv2 从 RAW 文件中提取 EXIF 和镜头信息。
+    如果 pyexiv2 读取失败，尝试从 rawpy 中获取基本信息。
     
     Args:
         raw_path: RAW 文件路径
@@ -231,6 +276,7 @@ def extract_lens_exif(raw_path: str) -> Tuple[dict, pyexiv2.Image]:
     """
     result = {}
     exif_img = None
+    pyexiv2_failed = False
     
     try:
         # 使用 pyexiv2 读取 EXIF 数据
@@ -284,10 +330,29 @@ def extract_lens_exif(raw_path: str) -> Tuple[dict, pyexiv2.Image]:
                 pass
                 
     except Exception as e:
-        logger.error(f"  ❌ [EXIF Error] {e}")
+        error_msg = str(e)
+        pyexiv2_failed = True
+        
+        # Sony2 目录错误是已知的 exiv2 库限制，不影响其他 EXIF 数据读取
+        logger.error(f"  ❌ [EXIF Error] {error_msg}")
+        logger.info("  ℹ️  Trying to extract basic info from rawpy...")
+        
         if exif_img:
             exif_img.close()
             exif_img = None
+    
+    # 如果 pyexiv2 失败或数据不完整，尝试从 rawpy 获取基本信息
+    if pyexiv2_failed:
+        try:
+            # 使用新的 rawpy 参数对象 (rawpy >= 0.20.0)
+            result['camera_maker'] = raw.camera_params.make
+            result['camera_model'] = raw.camera_params.model
+            result['lens_maker'] = raw.lens_params.make
+            result['lens_model'] = raw.lens_params.model
+            result['focal_length'] = raw.other_params.focal_len
+            result['aperture'] = raw.other_params.aperture
+        except Exception as e:
+            logger(f"  ❌ [EXIF Error] {e}")
     
     # 过滤掉空值，防止下游出错
     result = {k: v for k, v in result.items() if v}

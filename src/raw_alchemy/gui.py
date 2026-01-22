@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QInputDialog
 )
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QObject, QTimer, QEvent
-from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QResizeEvent, QTransform
+from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QResizeEvent, QTransform, QPen
 
 from qfluentwidgets import (
     FluentWindow, SubtitleLabel, PrimaryPushButton, PushButton,
@@ -374,9 +374,8 @@ class ImageProcessor(QThread):
             self.exif_data = None
             self.current_path = path
         
-        self.exif_data, _ = utils.extract_lens_exif(path)
-
         with rawpy.imread(path) as raw:
+            self.exif_data, _ = utils.extract_lens_exif(path, raw)
             raw_post = raw.postprocess(
                 gamma=(1, 1),
                 no_auto_bright=True,
@@ -550,11 +549,10 @@ class HistogramWidget(QWidget):
         if img_array is None:
             return
         
-        # 存储待处理数据的副本，避免跨线程数据竞争
+        # 存储待处理数据，避免跨线程数据竞争
         try:
             self.pending_data = img_array.copy() if img_array is not None else None
         except Exception:
-            # 如果复制失败，跳过此次更新
             return
         self.update_timer.start()
     
@@ -563,28 +561,19 @@ class HistogramWidget(QWidget):
         if self.pending_data is None:
             return
         
-        # 获取并清除待处理数据，避免重复处理
         data = self.pending_data
         self.pending_data = None
             
         try:
-            # 确保数据有效
             if data is None or data.size == 0:
                 return
             
-            # 确保数据是连续的 numpy 数组
-            if not data.flags['C_CONTIGUOUS']:
-                data = np.ascontiguousarray(data)
-            
-            # 使用更激进的采样率提升性能 (8x vs 4x)
+            # 使用utils中的快速计算函数
             self.hist_data = utils.compute_histogram_fast(data, bins=100, sample_rate=4)
-            self.update()  # 使用update()而非repaint(),让Qt优化重绘
-        except (RuntimeError, ValueError, TypeError) as e:
-            # 捕获常见的数组操作错误，静默处理
-            # 这些错误通常是由于跨线程数据竞争导致的
+            self.update()
+        except (RuntimeError, ValueError, TypeError):
             pass
         except Exception as e:
-            # 其他未知错误，记录但不崩溃
             logger.error(f"Histogram update error: {type(e).__name__}: {e}")
 
     def paintEvent(self, event):
@@ -683,6 +672,159 @@ class HistogramWidget(QWidget):
             painter.drawPolygon(QPolygonF(points))
 
 
+class WaveformWidget(QWidget):
+    """示波器组件 - 显示图像的亮度分布"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(150)
+        self.waveform_data = None
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        
+        # 优化: 添加更新定时器防抖
+        self.update_timer = QTimer()
+        self.update_timer.setSingleShot(True)
+        self.update_timer.setInterval(50)  # 50ms防抖
+        self.update_timer.timeout.connect(self._do_update)
+        self.pending_data = None
+
+    def update_data(self, img_array):
+        """异步更新示波器数据 - 使用防抖避免频繁计算"""
+        if img_array is None:
+            return
+        
+        # 存储待处理数据，避免跨线程数据竞争
+        try:
+            self.pending_data = img_array.copy() if img_array is not None else None
+        except Exception:
+            return
+        self.update_timer.start()
+    
+    def _do_update(self):
+        """实际执行示波器计算"""
+        if self.pending_data is None:
+            return
+        
+        data = self.pending_data
+        self.pending_data = None
+            
+        try:
+            if data is None or data.size == 0:
+                return
+            
+            # 使用utils中的快速计算函数
+            self.waveform_data = utils.compute_waveform_fast(data, bins=100, sample_rate=4)
+            self.update()
+        except (RuntimeError, ValueError, TypeError):
+            pass
+        except Exception as e:
+            logger.error(f"Waveform update error: {type(e).__name__}: {e}")
+
+    def paintEvent(self, event):
+        if self.waveform_data is None:
+            return
+        
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        w = self.width()
+        h = self.height()
+        
+        # 填充深色背景
+        painter.fillRect(self.rect(), QColor(10, 10, 10))
+        
+        # 绘制专业网格线（达芬奇风格）
+        try:
+            line_color = QColor(0, 255, 0, 180)  # 绿色网格线
+            painter.setPen(line_color)
+            
+            # IRE范围：-4% 到 109% (总共113%范围)
+            # 计算关键IRE线的Y坐标
+            def ire_to_y(ire_value):
+                """将IRE值转换为屏幕Y坐标"""
+                # -4% IRE 在底部 (y=h)
+                # 109% IRE 在顶部 (y=0)
+                normalized = (ire_value - (-4.0)) / 113.0  # 0到1
+                return h - (normalized * h)
+            
+            # A: 109% IRE - 虚线
+            y_109 = ire_to_y(109)
+            painter.setPen(QPen(line_color, 0.5, Qt.PenStyle.DashLine))
+            painter.drawLine(0, int(y_109), w, int(y_109))
+            
+            # B: 100% IRE - 实线加粗
+            y_100 = ire_to_y(100)
+            painter.setPen(QPen(line_color, 1.0, Qt.PenStyle.SolidLine))
+            painter.drawLine(0, int(y_100), w, int(y_100))
+            
+            # C: 50% IRE - 实线加粗
+            y_50 = ire_to_y(50)
+            painter.setPen(QPen(line_color, 1.0, Qt.PenStyle.SolidLine))
+            painter.drawLine(0, int(y_50), w, int(y_50))
+            
+            # D: 0% IRE - 实线加粗
+            y_0 = ire_to_y(0)
+            painter.setPen(QPen(line_color, 1.0, Qt.PenStyle.SolidLine))
+            painter.drawLine(0, int(y_0), w, int(y_0))
+            
+            # E: -4% IRE - 虚线
+            y_minus4 = ire_to_y(-4)
+            painter.setPen(QPen(line_color, 1.0, Qt.PenStyle.DashLine))
+            painter.drawLine(0, int(y_minus4), w, int(y_minus4))
+            
+            # 0-100%之间每10%画虚线
+            painter.setPen(QPen(line_color, 0.5, Qt.PenStyle.DashLine))
+            for ire in [10, 20, 30, 40, 60, 70, 80, 90]:
+                y_ire = ire_to_y(ire)
+                painter.drawLine(0, int(y_ire), w, int(y_ire))
+            
+        except Exception as e:
+            logger.error(f"Error drawing grid: {e}")
+        
+        # 绘制波形数据
+        try:
+            waveform = self.waveform_data
+            num_cols, num_bins = waveform.shape
+            
+            if num_cols == 0:
+                return
+            
+            col_width = w / num_cols
+            
+            # 使用灰白色点状绘制（达芬奇风格）
+            for col_idx in range(num_cols):
+                x = col_idx * col_width
+                
+                # 获取该列的数据
+                column_data = waveform[col_idx, :]
+                
+                # 绘制每个有值的点
+                for bin_idx in range(num_bins):
+                    if column_data[bin_idx] > 0:
+                        # Y坐标：bin_idx越大（IRE越高），Y越小（屏幕上越高）
+                        # bin 0 对应 -4% IRE (底部)
+                        # bin (num_bins-1) 对应 109% IRE (顶部)
+                        y = h - (bin_idx / float(num_bins - 1) * h)
+                        
+                        # 根据密度设置透明度和亮度（增强显示效果）
+                        density = column_data[bin_idx]
+                        # 提高基础透明度和密度系数
+                        alpha = int(density * 255) + 100
+                        alpha = min(255, alpha)
+                        
+                        # 使用灰白色（亮度波形用灰度显示更专业）
+                        # 密度越高，颜色越亮 - 提高基础亮度和密度系数
+                        brightness = int(density * 200) + 120
+                        brightness = min(255, brightness)
+                        color = QColor(brightness, brightness, brightness, alpha)
+                        painter.setPen(color)
+                        
+                        # 绘制点
+                        painter.drawPoint(int(x), int(y))
+            
+        except Exception as e:
+            logger.error(f"Error painting waveform: {e}")
+
+
 class GalleryItem(QWidget):
     """Custom widget for gallery item (Image + Text)"""
     def __init__(self, path, pixmap, parent=None):
@@ -736,9 +878,27 @@ class InspectorPanel(ScrollArea):
         self.manual_ev_value = 0.0  # 手动模式的EV
         self.auto_ev_value = 0.0    # 自动模式计算的EV（只读）
         
-        # --- Histogram ---
+        # --- Histogram / Waveform with Switch ---
         self.hist_widget = HistogramWidget()
-        self.add_section(tr('histogram'), self.hist_widget)
+        self.waveform_widget = WaveformWidget()
+        self.waveform_widget.hide()  # Initially hidden
+        
+        # Create a container for the display mode switch
+        display_mode_card = SimpleCardWidget()
+        display_mode_layout = QVBoxLayout(display_mode_card)
+        display_mode_layout.setSpacing(5)
+        
+        # Switch button for histogram/waveform
+        self.display_mode_switch = SwitchButton()
+        self.display_mode_switch.setChecked(False)  # False = Histogram, True = Waveform
+        self.display_mode_switch.checkedChanged.connect(self._on_display_mode_changed)
+        self._update_display_mode_switch_text()
+        
+        display_mode_layout.addWidget(self.display_mode_switch)
+        
+        self.add_section(tr('histogram_waveform'), display_mode_card)
+        self.v_layout.addWidget(self.hist_widget)
+        self.v_layout.addWidget(self.waveform_widget)
 
         # --- Exposure ---
         self.exp_card = SimpleCardWidget()
@@ -1050,6 +1210,28 @@ class InspectorPanel(ScrollArea):
             InfoBar.info(tr('db_cleared'), tr('using_default_db'), parent=self)
         except Exception as e:
             InfoBar.warning(tr('db_cleared'), f"Warning: {str(e)}", parent=self)
+
+    def _update_display_mode_switch_text(self):
+        """Update the display mode switch button text based on its state"""
+        if self.display_mode_switch.isChecked():
+            self.display_mode_switch.setText(tr('waveform'))
+        else:
+            self.display_mode_switch.setText(tr('histogram'))
+    
+    def _on_display_mode_changed(self):
+        """Handle display mode switch between histogram and waveform"""
+        is_waveform = self.display_mode_switch.isChecked()
+        
+        if is_waveform:
+            # Switch to waveform
+            self.hist_widget.hide()
+            self.waveform_widget.show()
+        else:
+            # Switch to histogram
+            self.waveform_widget.hide()
+            self.hist_widget.show()
+        
+        self._update_display_mode_switch_text()
 
     def _update_exposure_switch_text(self):
         """Update the switch button text based on its state"""
@@ -2139,8 +2321,9 @@ class MainWindow(FluentWindow):
             self.preview_lbl.setPixmap(display_pixmap)
             self.preview_lbl.update()
         
-        # Update histogram
+        # Update histogram and waveform
         self.right_panel.hist_widget.update_data(img_float)
+        self.right_panel.waveform_widget.update_data(img_float)
 
     def on_load_complete(self, image_path, request_id):
         """Handle RAW loading completion"""

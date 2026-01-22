@@ -362,5 +362,58 @@ def compute_histogram_channel(data, bins, min_val, max_val):
     
     return hist
 
+@cc.export('compute_waveform_channel', 'void(float32[:,:], float32[:,:], int64, int64)')
+def compute_waveform_channel(channel_data, waveform_out, bins, sample_rate):
+    """
+    计算单个通道的示波器数据 - 专业达芬奇风格
+    支持 -4% 到 109% IRE 范围的显示
+    
+    Args:
+        channel_data: HxW 的通道数据 (float32, 0-1范围)
+        waveform_out: sampled_width x bins 的输出数组 (float32)
+        bins: 垂直bins数量
+        sample_rate: 水平采样率
+    """
+    h, w = channel_data.shape
+    sampled_width = w // sample_rate
+    if sampled_width == 0:
+        sampled_width = 1
+    
+    # 专业IRE范围：-4% 到 109% (总共113%的范围)
+    # 0-1的输入值映射到0-100% IRE
+    # bins需要覆盖-4到109的范围
+    ire_min = -4.0
+    ire_max = 109.0
+    ire_range = ire_max - ire_min  # 113
+    
+    bins_minus_1 = bins - 1
+    
+    for i in range(sampled_width):
+        col_idx = i * sample_rate
+        if col_idx >= w:
+            break
+        
+        # 处理该列的所有像素
+        for row in range(h):
+            val = channel_data[row, col_idx]
+            
+            # 将0-1的值转换为0-100% IRE
+            ire_value = val * 100.0
+            
+            # 映射到-4到109的范围内的bin索引
+            # bin 0 对应 -4% IRE
+            # bin (bins-1) 对应 109% IRE
+            normalized_pos = (ire_value - ire_min) / ire_range
+            bin_idx = int(normalized_pos * bins_minus_1)
+            
+            # 限制在有效范围内
+            if bin_idx < 0:
+                bin_idx = 0
+            elif bin_idx >= bins:
+                bin_idx = bins - 1
+            
+            # 累加到对应的bin
+            waveform_out[i, bin_idx] += 1.0
+
 if __name__ == "__main__":
     cc.compile()
