@@ -410,8 +410,11 @@ class ImageProcessor(QThread):
 
     def _do_process(self, request: ProcessRequest):
         """Process image with parameters"""
+        logger.debug(f"[Worker] _do_process called for: {os.path.basename(request.path)}, request_id={request.request_id}")
+        
         # Ensure image is loaded and matches request path
         if self.cached_linear is None or self.current_path != request.path:
+            logger.debug(f"[Worker] Need to load first (cached_linear={'None' if self.cached_linear is None else 'exists'}, current_path={os.path.basename(self.current_path) if self.current_path else 'None'})")
             # Need to load first
             self._do_load(ProcessRequest(request.path, {'_load': True}, request.request_id))
             if self.cached_linear is None:
@@ -435,6 +438,7 @@ class ImageProcessor(QThread):
         
         # Exposure
         if params.get('exposure_mode') == 'Manual':
+            logger.debug(f"[Worker] Applying manual exposure: {params.get('exposure', 0.0)} EV")
             gain = 2.0 ** params.get('exposure', 0.0)
             utils.apply_gain_inplace(img, gain)
             applied_ev = params.get('exposure', 0.0)
@@ -442,9 +446,11 @@ class ImageProcessor(QThread):
             source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
             mode = params.get('metering_mode', 'matrix')
             
+            logger.debug(f"[Worker] *** CALLING AUTO EXPOSURE *** mode={mode}, request_id={request.request_id}")
             # metering 模块会使用 loguru
             _, gain = metering.apply_auto_exposure(img, source_cs, mode)
             applied_ev = np.log2(gain)  # Convert gain to EV
+            logger.debug(f"[Worker] Auto exposure complete: applied_ev={applied_ev:.2f}")
         
         # White Balance
         temp_val = params.get('wb_temp', 0.0)
@@ -1905,12 +1911,15 @@ class MainWindow(FluentWindow):
         if path == self.current_raw_path:
             return
 
+        logger.debug(f"[Gallery] Clicked item: {os.path.basename(path)}")
+
         # Save current params before switching
         if self.current_raw_path:
             self.file_params_cache[self.current_raw_path] = self.right_panel.get_params()
 
         # Switch path
         self.current_raw_path = path
+        logger.debug(f"[Gallery] Switched to: {os.path.basename(path)}")
         
         # Update window title with current filename
         self.update_window_title()
@@ -1922,11 +1931,13 @@ class MainWindow(FluentWindow):
         
         # Reset auto EV display if in auto mode (will be updated after processing)
         if self.right_panel.auto_exp_radio.isChecked():
+            logger.debug("[Gallery] Resetting auto EV display")
             self.right_panel.auto_ev_value = 0.0
-            # self.right_panel.exp_slider.blockSignals(True)
+            # Block signals to prevent triggering param_changed
+            self.right_panel.exp_slider.blockSignals(True)
             self.right_panel.exp_slider.setValue(0)
             self.right_panel.exp_slider.update()  # Force visual refresh
-            # self.right_panel.exp_slider.blockSignals(False)
+            self.right_panel.exp_slider.blockSignals(False)
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: 0.0")
         
         # 4. Restore params or Reset
@@ -1943,6 +1954,7 @@ class MainWindow(FluentWindow):
         self.update_mark_button_state()
         
         # 6. Load Image
+        logger.debug(f"[Gallery] Loading image: {os.path.basename(path)}")
         self.load_image(path)
         
         # 7. 如果这张图像有保存的基准点参数，加载后重新生成基准点图像
@@ -1956,12 +1968,14 @@ class MainWindow(FluentWindow):
         self.processor.load_image(path)
         
     def on_param_changed(self, params):
+        logger.debug(f"[Params] Parameter changed, starting debounce timer")
         # Debounce - trigger processing after brief delay
         self.update_timer.start()
     
     def trigger_processing(self):
         if not self.current_raw_path:
             return
+        logger.debug(f"[Processing] Trigger processing for: {os.path.basename(self.current_raw_path)}")
         params = self.right_panel.get_params()
         self.current_request_id += 1
         self.processor.update_preview(self.current_raw_path, params)
@@ -2053,12 +2067,13 @@ class MainWindow(FluentWindow):
         if self.right_panel.auto_exp_radio.isChecked():
             self.right_panel.auto_ev_value = applied_ev
             # Update display without triggering param change
-            # self.right_panel.exp_slider.blockSignals(True)
+            self.right_panel.exp_slider.blockSignals(True)
             self.right_panel.exp_slider.setValue(int(applied_ev * 10))
             self.right_panel.exp_slider.update()  # Force immediate visual refresh
-            # self.right_panel.exp_slider.blockSignals(False)
+            self.right_panel.exp_slider.blockSignals(False)
             # Manually update label since blockSignals prevented valueChanged
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: {applied_ev:+.1f}")
+            logger.debug(f"[Result] Updated auto EV display to {applied_ev:+.1f} (signals blocked)")
         
         # Display
         display_pixmap = self.current.get_display(self.preview_lbl.size())
@@ -2071,25 +2086,38 @@ class MainWindow(FluentWindow):
 
     def on_load_complete(self, image_path, request_id):
         """Handle RAW loading completion"""
+        logger.debug(f"[Load] Load complete: {os.path.basename(image_path)}, request_id={request_id}")
+        
         # Ignore stale results
         if request_id != self.current_request_id or image_path != self.current_raw_path:
+            logger.debug(f"[Load] Ignoring stale result (current_request_id={self.current_request_id}, current_path={os.path.basename(self.current_raw_path) if self.current_raw_path else 'None'})")
             return
         
         # RAW loading is complete, show processing message
         self.preview_lbl.setText(tr('processing'))
         
+        # Cancel any pending debounce timer to avoid duplicate processing
+        if self.update_timer.isActive():
+            logger.debug("[Load] Stopping active debounce timer to avoid duplicate processing")
+            self.update_timer.stop()
+        
         # Trigger processing - but only if still the current image
         # Capture path to avoid race condition with fast image switching
         if image_path == self.current_raw_path:
+            logger.debug(f"[Load] Scheduling processing for: {os.path.basename(image_path)}")
             QTimer.singleShot(0, lambda: self._trigger_processing_for_path(image_path))
     
     def _trigger_processing_for_path(self, path):
         """Trigger processing for specific path - prevents race conditions"""
+        logger.debug(f"[Processing] _trigger_processing_for_path called for: {os.path.basename(path)}")
+        
         if path != self.current_raw_path:
+            logger.debug(f"[Processing] Path mismatch, aborting (current: {os.path.basename(self.current_raw_path) if self.current_raw_path else 'None'})")
             return  # User switched away, don't process
         
         params = self.right_panel.get_params()
         self.current_request_id += 1
+        logger.debug(f"[Processing] Calling processor.update_preview, request_id={self.current_request_id}, exposure_mode={params.get('exposure_mode')}")
         self.processor.update_preview(path, params)
 
     def on_error(self, msg):

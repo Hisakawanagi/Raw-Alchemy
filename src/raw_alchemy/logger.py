@@ -25,7 +25,7 @@ logger.remove()  # 移除默认处理器
 logger.add(
     sys.stderr,
     format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-    level="DEBUG",
+    level="INFO",  # 控制台只显示 INFO 及以上级别，DEBUG 日志只写入文件
     colorize=True
 )
 
