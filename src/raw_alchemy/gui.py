@@ -2545,7 +2545,7 @@ class MainWindow(FluentWindow):
             self,
             tr('export_image'),
             default_path,
-            "JPEG (*.jpg);;HEIF (*.heif);;TIFF (*.tif)"
+            "JPEG (*.jpg);;HEIF (*.heif);;TIFF (*.tif);;DNG (*.dng)"
         )
         
         # Check if user clicked OK and provided a valid path
@@ -2577,7 +2577,7 @@ class MainWindow(FluentWindow):
              return
         
         # Ask for format
-        formats = ["JPEG", "HEIF", "TIFF"]
+        formats = ["JPEG", "HEIF", "TIFF", "DNG"]
         format_str, ok = QInputDialog.getItem(self, tr('select_export_format'), "Format:", formats, 0, False)
         
         if not ok:
@@ -2599,7 +2599,7 @@ class MainWindow(FluentWindow):
              self.batch_export_folder = folder
              
              # Map format string to extension
-             fmt_map = {"JPEG": "jpg", "HEIF": "heif", "TIFF": "tif"}
+             fmt_map = {"JPEG": "jpg", "HEIF": "heif", "TIFF": "tif", "DNG": "dng"}
              self.batch_export_ext = fmt_map.get(format_str, "jpg")
              
              # 显示批量导出中通知
@@ -2664,7 +2664,7 @@ class MainWindow(FluentWindow):
         
         # Determine format from extension
         ext = os.path.splitext(output_path)[1].lower().replace('.', '')
-        if ext not in ['jpg', 'heif', 'tif', 'tiff']: ext = 'jpg'
+        if ext not in ['jpg', 'heif', 'tif', 'tiff', 'dng']: ext = 'jpg'
         
         # 确定曝光值：无论是手动还是自动模式，都使用界面上的值
         # 这样可以确保导出的图像与预览一致

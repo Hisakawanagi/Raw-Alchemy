@@ -174,6 +174,22 @@ def process_image(
         except Exception as e:
             logger.error(f"  ❌ applying LUT: {e}")
 
+    # --- Step 5.5: DNG 线性化处理 ---
+    # 如果保存为 DNG，必须确保数据是线性的 (Linear Raw)。
+    # 前面的 Log 变换或 sRGB 转换可能已经应用了 Gamma/Log 曲线，需要逆转。
+    if output_path.lower().endswith('.dng'):
+        logger.info("  🔹 [Pre-Save] Converting to Linear for DNG export...")
+        try:
+            if log_space and log_space != 'None' and not lut_path:
+                # Log 模式：逆转 Log 曲线
+                log_curve_name = LOG_ENCODING_MAP.get(log_space, log_space)
+                img = colour.cctf_decoding(img, function=log_curve_name)
+            else:
+                # 标准模式：逆转 sRGB 曲线 (sRGB EOTF)
+                img = colour.cctf_decoding(img, function='sRGB')
+        except Exception as e:
+            logger.warning(f"  ⚠️  Linearization failed: {e}. Saving as is.")
+
     # --- Step 6: 保存（使用模块化的文件保存功能）---
     logger.info(f"  💾 Saving to {os.path.basename(output_path)}...")
     save_image(img, output_path, logger, exif_img=exif_img, exif_dict=exif_data)
