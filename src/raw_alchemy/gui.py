@@ -1401,6 +1401,12 @@ class MainWindow(FluentWindow):
         # Restore UI state from saved settings
         self.restore_ui()
     
+    def systemTitleBarRect(self, size: QSize):
+        """重写 macOS 三大件到左上角"""
+        if sys.platform != "darwin":
+            return super().systemTitleBarRect(size)
+        return QRect(0, 0 if self.isFullScreen() else 9, 75, size.height())
+
     def update_window_title(self):
         """更新窗口标题以显示当前文件名"""
         if self.current_raw_path:
