@@ -1,5 +1,17 @@
+from pathlib import Path
 import sys
 import os
+import platform
+
+# 1. 定义一个用于存放 Matplotlib 缓存的目录
+# Windows通常在 AppData, Mac通常在 ~/Library/Caches
+config_dir = os.path.expanduser('~/.raw_alchemy/matplotlib_cache')
+# 2. 确保目录存在
+os.makedirs(config_dir, exist_ok=True)
+
+# 3. 设置环境变量 (必须在 import matplotlib 之前！)
+os.environ['MPLCONFIGDIR'] = config_dir
+
 import time
 import threading
 import multiprocessing

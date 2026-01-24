@@ -81,7 +81,7 @@ jobs:
 
       - name: Install macOS system dependencies
         run: |
-          brew install create-dmg python-tk@3.12
+          brew install create-dmg python-tk@3.12 brotli gettext inih
 
       - name: Convert PNG to ICNS for macOS icon
         run: |

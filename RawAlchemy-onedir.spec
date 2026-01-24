@@ -11,6 +11,7 @@ strip_executable = True if sys.platform.startswith('linux') else False
 # --- Platform-specific binaries ---
 import os
 import glob
+from PyInstaller.utils.hooks import collect_all
 
 binaries_list = []
 
@@ -45,6 +46,43 @@ if sys.platform == 'darwin' or sys.platform.startswith('linux'):
             break
     if lib_file:
         binaries_list.append((lib_file, '.'))
+
+if sys.platform == 'darwin':
+    # List of libraries to manually bundle.
+    # 这里的列表完全基于 otool -L 的输出结果整理
+    libs_to_bundle = [
+        # --- Brotli (必须同时包含 dec 和 common) ---
+        '/opt/homebrew/opt/brotli/lib/libbrotlidec.1.dylib',
+        '/opt/homebrew/opt/brotli/lib/libbrotlicommon.1.dylib',
+        
+        # --- Gettext ---
+        '/opt/homebrew/opt/gettext/lib/libintl.8.dylib',
+
+        # --- INIH (必须同时包含 Reader 和 Core) ---
+        '/opt/homebrew/opt/inih/lib/libINIReader.0.dylib',
+        '/opt/homebrew/opt/inih/lib/libinih.0.dylib',
+    ]
+    
+    found_libs = set()
+    
+    for lib_path in libs_to_bundle:
+        if os.path.exists(lib_path):
+            lib_name = os.path.basename(lib_path)
+            # Only add if we haven't added this lib name yet
+            if lib_name not in found_libs:
+                print(f"Found system library: {lib_path}")
+                binaries_list.append((lib_path, '.')) 
+                found_libs.add(lib_name)
+        else:
+            print(f"⚠️ WARNING: Library not found: {lib_path}")
+            print("Please run: brew install brotli gettext inih")
+
+pyexiv2_ret = collect_all('pyexiv2')
+pyexiv2_datas = pyexiv2_ret[0]
+pyexiv2_binaries = pyexiv2_ret[1]
+pyexiv2_hiddenimports = pyexiv2_ret[2]
+binaries_list.extend(pyexiv2_binaries)
+
 
 
 a = Analysis(
