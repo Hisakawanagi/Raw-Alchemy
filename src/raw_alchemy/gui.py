@@ -1603,6 +1603,20 @@ class MainWindow(FluentWindow):
         self.h_layout.setContentsMargins(0, 0, 0, 0)
         self.h_layout.setSpacing(0)
         
+        # 隐藏左上角“返回/导航”按钮（红框处），并让下面的第一个导航项保持原位置
+        # NavigationPanel.topLayout 是纵向布局：returnButton + menuButton + items...
+        # 直接隐藏 returnButton 会导致下面整体上移，因此这里用 insertSpacing(0, ..) 人为补一格高度。
+        try:
+            if hasattr(self, 'navigationInterface') and hasattr(self.navigationInterface, 'panel'):
+                panel = self.navigationInterface.panel
+                if hasattr(panel, 'returnButton'):
+                    panel.returnButton.hide()
+                if hasattr(panel, 'topLayout') and panel.topLayout is not None:
+                    # 48 是 FluentTitleBar 的默认高度（与 UI “一格”相近）
+                    panel.topLayout.insertSpacing(0, 43)
+        except Exception:
+            pass
+        
         # 1. Left Panel (Gallery)
         self.left_panel = QWidget()
         self.left_panel.setFixedWidth(400)
