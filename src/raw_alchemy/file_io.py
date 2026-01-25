@@ -7,7 +7,7 @@ import numpy as np
 import tifffile
 from PIL import Image
 import pillow_heif
-from typing import Optional
+from typing import List, Optional
 from raw_alchemy.logger import Logger
 import pyexiv2
 
@@ -16,7 +16,8 @@ def save_image(
     output_path: str,
     logger: Optional[Logger] = None,
     exif_img: Optional[pyexiv2.Image] = None,
-    exif_dict: Optional[dict] = None
+    exif_dict: Optional[dict] = None,
+    color_matrix = None
 ) -> bool:
     """
     保存图像到指定路径，根据扩展名自动选择格式
@@ -47,7 +48,7 @@ def save_image(
         if file_ext in ['.tif', '.tiff']:
             _save_tiff(img, output_path, logger)
         elif file_ext == '.dng':
-            _save_dng(img, output_path, logger)
+            _save_dng(img, output_path, color_matrix, logger)
             exif_handled_internally = True  # 【重要】DNG 格式已在保存时写入了必要标签
         elif file_ext in ['.heic', '.heif']:
             _save_heif(img, output_path, logger)
@@ -102,7 +103,7 @@ def _save_heif(img: np.ndarray, output_path: str, logger: Logger):
     heif_file.save(output_path, quality=85, bit_depth=10)
 
 
-def _save_dng(img: np.ndarray, output_path: str, logger: Logger):
+def _save_dng(img: np.ndarray, output_path: str, color_matrix, logger: Logger):
     """保存为 16-bit DNG 格式 (Adobe Digital Negative)"""
     logger.info("    Format: DNG (16-bit, Linear Raw)")
     output_image_uint16 = (img * 65535).astype(np.uint16)
@@ -120,21 +121,21 @@ def _save_dng(img: np.ndarray, output_path: str, logger: Logger):
     black_level = [0, 0, 0] # RGB 三通道的黑电平
 
     # 3. 颜色矩阵 (ColorMatrix1) - sRGB -> XYZ (D65) 转换矩阵
-    # X = 0.4124564 R + 0.3575761 G + 0.1804375 B
-    # Y = 0.2126729 R + 0.7151522 G + 0.0721750 B
-    # Z = 0.0193339 R + 0.1191920 G + 0.9503041 B
-    matrix_xyz_to_rec709 = [
-        3.2404542, -1.5371385, -0.4985314,
-        -0.9692660,  1.8760108,  0.0415560,
-        0.0556434, -0.2040259,  1.0572252
-    ]
+    if color_matrix is not None:
+        matrix_xyz = color_matrix.flatten().tolist()
+    else:
+        matrix_xyz = [
+            3.2404542, -1.5371385, -0.4985314,
+            -0.9692660,  1.8760108,  0.0415560,
+            0.0556434, -0.2040259,  1.0572252
+        ]
     # 转换浮点矩阵为分数形式 (TIFF SRATIONAL 需要 numerator, denominator)
     # 扁平化列表: [num1, den1, num2, den2, ...]
     matrix_rational = []
-    for v in matrix_xyz_to_rec709:
+    for v in matrix_xyz:
         matrix_rational.extend([int(v * 10000), 10000])
     
-    calibration_illuminant1 = 23 # D50
+    calibration_illuminant1 = 21 # D50
 
     # TIFF Data Types (使用整数代码以兼容不同版本的 tifffile)
     TIFF_BYTE = 1
@@ -180,9 +181,9 @@ def _save_dng(img: np.ndarray, output_path: str, logger: Logger):
         (51109, TIFF_RATIONAL, 1, baseline_exposure_offset_value), # BaselineExposureOffset (0 EV)
 
                 # --- 新增的 Profile 标签 ---
+        (50933, TIFF_LONG, 1, profile_embed_policy),               # ProfileEmbedPolicy
         (50936, TIFF_ASCII, len(profile_name)+1, profile_name),    # ProfileName
         (50940, TIFF_FLOAT, 4, profile_tone_curve),                 # ProfileToneCurve (强制线性)
-        (50933, TIFF_LONG, 1, profile_embed_policy),               # ProfileEmbedPolicy
         (51110, TIFF_LONG, 1, default_black_render),               # DefaultBlackRender (禁止黑点修正)
     ]
 
