@@ -283,9 +283,37 @@ def apply_auto_exposure(
     Returns:
         tuple: (调整后的图像, 应用的增益)
     """
-
-    strategy = get_metering_strategy(metering_mode)
-    gain = strategy.calculate_gain(img_linear, source_colorspace, target_gray)
-    utils.apply_gain_inplace(img_linear, float(gain))
-    
-    return img_linear, float(gain)
+    try:
+        logger.debug(f"[Metering] Starting auto exposure calculation, mode={metering_mode}")
+        
+        # 验证输入数据
+        if img_linear is None or img_linear.size == 0:
+            logger.error("[Metering] Invalid input: empty image array")
+            return img_linear, 1.0
+        
+        if not np.isfinite(img_linear).all():
+            logger.warning("[Metering] Input contains NaN/Inf values, cleaning...")
+            img_linear = np.nan_to_num(img_linear, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        strategy = get_metering_strategy(metering_mode)
+        logger.debug(f"[Metering] Calculating gain with {strategy.__class__.__name__}")
+        
+        gain = strategy.calculate_gain(img_linear, source_colorspace, target_gray)
+        
+        # 验证gain值
+        if not np.isfinite(gain) or gain <= 0:
+            logger.error(f"[Metering] Invalid gain calculated: {gain}, using fallback 1.0")
+            gain = 1.0
+        
+        logger.debug(f"[Metering] Applying gain: {gain:.4f}")
+        utils.apply_gain_inplace(img_linear, float(gain))
+        
+        logger.debug(f"[Metering] Auto exposure completed successfully")
+        return img_linear, float(gain)
+        
+    except Exception as e:
+        logger.error(f"[Metering] Auto exposure failed: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(f"[Metering] Traceback:\n{traceback.format_exc()}")
+        # 返回原图和默认增益,避免崩溃
+        return img_linear, 1.0

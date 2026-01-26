@@ -431,82 +431,152 @@ class ImageProcessor(QThread):
         """Process image with parameters"""
         logger.debug(f"[Worker] _do_process called for: {os.path.basename(request.path)}, request_id={request.request_id}")
         
-        # Ensure image is loaded and matches request path
-        if self.cached_linear is None or self.current_path != request.path:
-            logger.debug(f"[Worker] Need to load first (cached_linear={'None' if self.cached_linear is None else 'exists'}, current_path={os.path.basename(self.current_path) if self.current_path else 'None'})")
-            # Need to load first
-            self._do_load(ProcessRequest(request.path, {'_load': True}, request.request_id))
-            if self.cached_linear is None:
-                return
-        
-        params = request.params
-        
-        # Lens correction check
-        current_lens_key = (params.get('lens_correct'), params.get('custom_db_path'))
-        
-        if current_lens_key != self.cached_lens_key or self.cached_corrected is None:
-            temp = self.cached_linear.copy()
-            if params.get('lens_correct') and self.exif_data:
-                temp = utils.apply_lens_correction(
-                    temp, self.exif_data, custom_db_path=params.get('custom_db_path')
-                )
-            self.cached_corrected = temp
-            self.cached_lens_key = current_lens_key
-        
-        img = self.cached_corrected.copy()
-        
-        # Exposure
-        if params.get('exposure_mode') == 'Manual':
-            logger.debug(f"[Worker] Applying manual exposure: {params.get('exposure', 0.0)} EV")
-            gain = 2.0 ** params.get('exposure', 0.0)
-            utils.apply_gain_inplace(img, gain)
-            applied_ev = params.get('exposure', 0.0)
-        else:
-            source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
-            mode = params.get('metering_mode', 'matrix')
+        try:
+            # Ensure image is loaded and matches request path
+            if self.cached_linear is None or self.current_path != request.path:
+                logger.debug(f"[Worker] Need to load first (cached_linear={'None' if self.cached_linear is None else 'exists'}, current_path={os.path.basename(self.current_path) if self.current_path else 'None'})")
+                # Need to load first
+                self._do_load(ProcessRequest(request.path, {'_load': True}, request.request_id))
+                if self.cached_linear is None:
+                    logger.error(f"[Worker] Failed to load image, aborting processing")
+                    return
             
-            logger.debug(f"[Worker] *** CALLING AUTO EXPOSURE *** mode={mode}, request_id={request.request_id}")
-            # metering 模块会使用 loguru
-            _, gain = metering.apply_auto_exposure(img, source_cs, mode)
-            applied_ev = np.log2(gain)  # Convert gain to EV
-            logger.debug(f"[Worker] Auto exposure complete: applied_ev={applied_ev:.2f}")
+            params = request.params
+            logger.debug(f"[Worker] Processing with params: exposure_mode={params.get('exposure_mode')}, log_space={params.get('log_space')}")
+            
+            # Lens correction check
+            current_lens_key = (params.get('lens_correct'), params.get('custom_db_path'))
+            
+            if current_lens_key != self.cached_lens_key or self.cached_corrected is None:
+                logger.debug(f"[Worker] Applying lens correction...")
+                temp = self.cached_linear.copy()
+                if params.get('lens_correct') and self.exif_data:
+                    temp = utils.apply_lens_correction(
+                        temp, self.exif_data, custom_db_path=params.get('custom_db_path')
+                    )
+                self.cached_corrected = temp
+                self.cached_lens_key = current_lens_key
+                logger.debug(f"[Worker] Lens correction complete")
+            
+            logger.debug(f"[Worker] Creating working copy of image")
+            img = self.cached_corrected.copy()
+            
+            # Exposure
+            if params.get('exposure_mode') == 'Manual':
+                logger.debug(f"[Worker] Applying manual exposure: {params.get('exposure', 0.0)} EV")
+                gain = 2.0 ** params.get('exposure', 0.0)
+                utils.apply_gain_inplace(img, gain)
+                applied_ev = params.get('exposure', 0.0)
+                logger.debug(f"[Worker] Manual exposure applied")
+            else:
+                source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
+                mode = params.get('metering_mode', 'matrix')
+                
+                logger.debug(f"[Worker] *** CALLING AUTO EXPOSURE *** mode={mode}, request_id={request.request_id}")
+                # metering 模块会使用 loguru
+                _, gain = metering.apply_auto_exposure(img, source_cs, mode)
+                applied_ev = np.log2(gain)  # Convert gain to EV
+                logger.debug(f"[Worker] Auto exposure complete: applied_ev={applied_ev:.2f}")
+                
+        except Exception as e:
+            logger.error(f"[Worker] Error in _do_process (before adjustments): {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[Worker] Traceback:\n{traceback.format_exc()}")
+            self.error_occurred.emit(f"Processing error: {str(e)}")
+            return
         
-        # White Balance
-        temp_val = params.get('wb_temp', 0.0)
-        tint = params.get('wb_tint', 0.0)
-        utils.apply_white_balance(img, temp_val, tint)
+        try:
+            # White Balance
+            logger.debug(f"[Worker] Applying white balance: temp={params.get('wb_temp', 0.0)}, tint={params.get('wb_tint', 0.0)}")
+            temp_val = params.get('wb_temp', 0.0)
+            tint = params.get('wb_tint', 0.0)
+            utils.apply_white_balance(img, temp_val, tint)
+            logger.debug(f"[Worker] White balance applied")
+            
+            # Highlight / Shadow
+            logger.debug(f"[Worker] Applying highlight/shadow: hl={params.get('highlight', 0.0)}, sh={params.get('shadow', 0.0)}")
+            hl = params.get('highlight', 0.0)
+            sh = params.get('shadow', 0.0)
+            utils.apply_highlight_shadow(img, hl, sh)
+            logger.debug(f"[Worker] Highlight/shadow applied")
+            
+            # Saturation / Contrast
+            logger.debug(f"[Worker] Applying saturation/contrast: sat={params.get('saturation', 1.0)}, con={params.get('contrast', 1.0)}")
+            sat = params.get('saturation', 1.0)
+            con = params.get('contrast', 1.0)
+            utils.apply_saturation_and_contrast(img, saturation=sat, contrast=con)
+            logger.debug(f"[Worker] Saturation/contrast applied")
+            
+        except Exception as e:
+            logger.error(f"[Worker] Error in adjustments: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[Worker] Traceback:\n{traceback.format_exc()}")
+            self.error_occurred.emit(f"Adjustment error: {str(e)}")
+            return
         
-        # Highlight / Shadow
-        hl = params.get('highlight', 0.0)
-        sh = params.get('shadow', 0.0)
-        utils.apply_highlight_shadow(img, hl, sh)
-        
-        # Saturation / Contrast
-        sat = params.get('saturation', 1.0)
-        con = params.get('contrast', 1.0)
-        utils.apply_saturation_and_contrast(img, saturation=sat, contrast=con)
-        
-        # Log Transform
+        # Log Transform - 添加完整的异常保护
         log_space = params.get('log_space')
         if log_space and log_space != 'None':
-            log_color_space = config.LOG_TO_WORKING_SPACE.get(log_space)
-            log_curve = config.LOG_ENCODING_MAP.get(log_space, log_space)
-            
-            if log_color_space:
-                M = colour.matrix_RGB_to_RGB(
-                    colour.RGB_COLOURSPACES['ProPhoto RGB'],
-                    colour.RGB_COLOURSPACES[log_color_space]
-                )
-                if not img.flags['C_CONTIGUOUS']:
-                    img = np.ascontiguousarray(img)
-                utils.apply_matrix_inplace(img, M)
-                np.maximum(img, 1e-6, out=img)
-                img = colour.cctf_encoding(img, function=log_curve)
+            try:
+                logger.debug(f"[Worker] Applying log transform: {log_space}")
+                log_color_space = config.LOG_TO_WORKING_SPACE.get(log_space)
+                log_curve = config.LOG_ENCODING_MAP.get(log_space, log_space)
+                
+                if log_color_space:
+                    # 验证输入数据
+                    if not np.isfinite(img).all():
+                        logger.warning(f"[Worker] Image contains NaN/Inf before log transform, cleaning...")
+                        img = np.nan_to_num(img, nan=0.0, posinf=1.0, neginf=0.0)
+                    
+                    # 计算变换矩阵
+                    M = colour.matrix_RGB_to_RGB(
+                        colour.RGB_COLOURSPACES['ProPhoto RGB'],
+                        colour.RGB_COLOURSPACES[log_color_space]
+                    )
+                    
+                    # 验证矩阵
+                    if not np.isfinite(M).all():
+                        logger.error(f"[Worker] Invalid transformation matrix for {log_space}")
+                        raise ValueError("Invalid transformation matrix")
+                    
+                    # 应用矩阵变换
+                    if not img.flags['C_CONTIGUOUS']:
+                        img = np.ascontiguousarray(img)
+                    utils.apply_matrix_inplace(img, M)
+                    
+                    # 验证矩阵变换结果
+                    if not np.isfinite(img).all():
+                        logger.warning(f"[Worker] Image contains NaN/Inf after matrix transform, cleaning...")
+                        img = np.nan_to_num(img, nan=0.0, posinf=1.0, neginf=0.0)
+                    
+                    # 裁剪负值
+                    np.maximum(img, 1e-6, out=img)
+                    
+                    # 应用log编码 - 最可能崩溃的地方
+                    logger.debug(f"[Worker] Applying log encoding: {log_curve}")
+                    img = colour.cctf_encoding(img, function=log_curve)
+                    
+                    # 验证最终结果
+                    if not np.isfinite(img).all():
+                        logger.warning(f"[Worker] Image contains NaN/Inf after log encoding, cleaning...")
+                        img = np.nan_to_num(img, nan=0.0, posinf=1.0, neginf=0.0)
+                    
+                    logger.debug(f"[Worker] Log transform completed successfully")
+                else:
+                    logger.warning(f"[Worker] Unknown log color space for {log_space}")
+                    
+            except Exception as e:
+                logger.error(f"[Worker] Log transform failed: {type(e).__name__}: {e}")
+                import traceback
+                logger.error(f"[Worker] Traceback:\n{traceback.format_exc()}")
+                # 继续处理,不应用log transform
+                logger.warning(f"[Worker] Skipping log transform due to error")
         
         # LUT
         lut_path = params.get('lut_path')
         if lut_path and os.path.exists(lut_path):
             try:
+                logger.debug(f"[Worker] Applying LUT: {os.path.basename(lut_path)}")
                 lut = colour.read_LUT(lut_path)
                 if isinstance(lut, colour.LUT3D):
                     if not img.flags['C_CONTIGUOUS']:
@@ -532,18 +602,40 @@ class ImageProcessor(QThread):
                     utils.apply_lut_inplace(img, lut_table, domain_min, domain_max)
                 else:
                     img = lut.apply(img)
+                logger.debug(f"[Worker] LUT applied successfully")
             except Exception as e:
-                logger.error(f"LUT application error: {e}")
+                logger.error(f"[Worker] LUT application error: {type(e).__name__}: {e}")
+                import traceback
+                logger.error(f"[Worker] Traceback:\n{traceback.format_exc()}")
         
-        # Display transform - sRGB Standard
-        if not log_space or log_space == 'None':
-            utils.linear_to_srgb_inplace(img)
-        
-        img = np.clip(img, 0, 1)
-        img_float = img.copy()
-        img_uint8 = (img * 255).astype(np.uint8)
-        
-        self.result_ready.emit(img_uint8, img_float, request.path, request.request_id, applied_ev)
+        try:
+            # Display transform - sRGB Standard
+            if not log_space or log_space == 'None':
+                logger.debug(f"[Worker] Applying sRGB display transform")
+                utils.linear_to_srgb_inplace(img)
+                logger.debug(f"[Worker] sRGB transform applied")
+            else:
+                logger.debug(f"[Worker] Skipping sRGB transform (log space already applied)")
+            
+            # 验证最终图像数据
+            if not np.isfinite(img).all():
+                logger.warning(f"[Worker] Final image contains NaN/Inf, cleaning...")
+                img = np.nan_to_num(img, nan=0.0, posinf=1.0, neginf=0.0)
+            
+            logger.debug(f"[Worker] Clipping and converting to output format")
+            img = np.clip(img, 0, 1)
+            img_float = img.copy()
+            img_uint8 = (img * 255).astype(np.uint8)
+            
+            logger.debug(f"[Worker] Processing complete, emitting result for request_id={request.request_id}")
+            self.result_ready.emit(img_uint8, img_float, request.path, request.request_id, applied_ev)
+            
+        except Exception as e:
+            logger.error(f"[Worker] Error in final output: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[Worker] Traceback:\n{traceback.format_exc()}")
+            self.error_occurred.emit(f"Output error: {str(e)}")
+            return
 
 
 # ==============================================================================
@@ -2399,14 +2491,17 @@ class MainWindow(FluentWindow):
         # Update auto EV value if in auto mode
         if self.right_panel.auto_exp_radio.isChecked():
             self.right_panel.auto_ev_value = applied_ev
-            # 临时断开valueChanged信号连接，避免触发参数变化
+            # 临时断开valueChanged信号,避免触发参数变化
+            # 注意:不能用blockSignals(),因为会阻止视觉更新
             try:
                 self.right_panel.exp_slider.valueChanged.disconnect(self.right_panel.exp_slider_callback)
             except:
                 pass  # 如果已经断开则忽略
             
-            # 更新滑条值（此时不会触发信号）
+            # 更新滑条值
             self.right_panel.exp_slider.setValue(int(applied_ev * 10))
+            self.right_panel.exp_slider.update()  # 强制视觉刷新
+            
             # 手动更新标签
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: {applied_ev:+.1f}")
             

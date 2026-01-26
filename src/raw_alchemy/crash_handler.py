@@ -50,7 +50,11 @@ class CrashHandler:
         logger.info("✅ Crash handler installed")
     
     def _register_signal_handlers(self):
-        """注册系统信号处理器"""
+        """注册系统信号处理器
+        
+        注意: 在多线程GUI应用中,信号处理器可能导致死锁
+        因此我们只注册最关键的信号,并避免在处理器中调用GUI代码
+        """
         # 定义要捕获的信号
         signals_to_catch = []
         
@@ -75,7 +79,10 @@ class CrashHandler:
                 logger.debug(f"Cannot register {sig_name}: {e}")
     
     def _signal_handler(self, signum, frame):
-        """信号处理函数 - 输出到统一日志"""
+        """信号处理函数 - 输出到统一日志
+        
+        重要: 不在此处调用GUI代码,避免死锁
+        """
         sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
         
         # 记录崩溃信息到 loguru（会自动写入日志文件）
@@ -90,16 +97,23 @@ class CrashHandler:
         logger.critical("Stack Trace:")
         logger.critical(self._format_stack_trace(frame))
         logger.critical("="*80)
+        logger.critical(f"Crash log saved to: {self.main_log_file}")
+        logger.critical("="*80)
         
-        # 尝试显示 GUI 错误对话框（如果可能）
+        # 不显示GUI对话框 - 避免在信号处理器中调用GUI代码导致死锁
+        # 用户可以通过日志文件查看崩溃信息
+        
+        # 强制刷新日志
         try:
-            crash_info = f"Signal: {sig_name} ({signum})\nLog: {self.main_log_file}"
-            self._show_crash_dialog(sig_name, crash_info)
+            import logging
+            for handler in logger._core.handlers.values():
+                if hasattr(handler, '_sink') and hasattr(handler._sink, 'flush'):
+                    handler._sink.flush()
         except:
             pass
         
-        # 退出程序
-        sys.exit(1)
+        # 立即退出程序
+        os._exit(1)  # 使用 os._exit 而不是 sys.exit,避免清理代码导致的额外问题
     
     def _exception_hook(self, exc_type, exc_value, exc_traceback):
         """全局异常钩子 - 输出到统一日志"""
