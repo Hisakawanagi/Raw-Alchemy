@@ -135,7 +135,7 @@ def _save_dng(img: np.ndarray, output_path: str, color_matrix, logger: Logger):
     for v in matrix_xyz:
         matrix_rational.extend([int(v * 10000), 10000])
     
-    calibration_illuminant1 = 21 # D50
+    calibration_illuminant1 = 21 # D65
 
     # TIFF Data Types (使用整数代码以兼容不同版本的 tifffile)
     TIFF_BYTE = 1

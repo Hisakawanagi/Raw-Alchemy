@@ -287,10 +287,24 @@ def apply_highlight_shadow_inplace(img, highlight, shadow, luma_coeffs):
                     b_v *= factor
             
             if highlight != 0.0:
-                 factor = 1.0 + highlight * (lum * lum * lum)
-                 r_v *= factor
-                 g_v *= factor
-                 b_v *= factor
+                # 高光压缩应当在接近 1.0 的区域逐渐生效：
+                # - highlight < 0: 压高光（将亮部拉回）
+                # - highlight > 0: 推高光（可能导致溢出/后续剪裁）
+                # 旧实现用 lum^3 作为 mask，会把暗部也一起整体乘因子，
+                # 当 highlight 为负时会把暗部进一步压暗，形成“黑洞”。
+                mask = lum
+                if mask < 0.0:
+                    mask = 0.0
+                elif mask > 1.0:
+                    mask = 1.0
+                t = 1.0 - mask  # 离 1 越近，t 越小
+                # 让高光调整集中在亮部：使用 (1-lum)^3 作为 roll-off
+                factor = 1.0 + highlight * (1.0 - t * t * t)
+                if factor < 0.0:
+                    factor = 0.0
+                r_v *= factor
+                g_v *= factor
+                b_v *= factor
             
             if r_v < 0.0: r_v = 0.0
             if g_v < 0.0: g_v = 0.0
