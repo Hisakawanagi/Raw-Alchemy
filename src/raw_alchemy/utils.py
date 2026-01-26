@@ -57,19 +57,43 @@ def compute_histogram_fast(img_array, bins=100, sample_rate=4):
     Returns:
         list of 3 histogram arrays (R, G, B) as float arrays
     """
-    # 子采样以提高速度
-    sample = img_array[::sample_rate, ::sample_rate, :]
-    
-    hist_data = []
-    for channel in range(3):
-        # 展平通道数据
-        channel_data = sample[:, :, channel].ravel()
-        # 使用 numba 加速的直方图计算
-        hist = compute_histogram_channel(channel_data, bins, 0.0, 1.0)
-        # 转换为浮点数以便绘制
-        hist_data.append(hist.astype(np.float64))
-    
-    return hist_data
+    try:
+        # 数据验证
+        if img_array is None or img_array.size == 0:
+            return None
+        
+        if len(img_array.shape) != 3 or img_array.shape[2] != 3:
+            return None
+        
+        # 子采样 - 使用copy()创建独立副本，避免数据竞争
+        sample = img_array[::sample_rate, ::sample_rate, :].copy()
+        
+        # 确保数据类型正确
+        if sample.dtype != np.float32:
+            sample = sample.astype(np.float32)
+        
+        # 确保数据在有效范围内
+        sample = np.clip(sample, 0.0, 1.0)
+        
+        hist_data = []
+        for channel in range(3):
+            # 展平通道数据 - 使用copy()确保连续内存
+            channel_data = sample[:, :, channel].ravel().copy()
+            
+            # 确保是C连续数组
+            if not channel_data.flags['C_CONTIGUOUS']:
+                channel_data = np.ascontiguousarray(channel_data)
+            
+            # 使用 numba 加速的直方图计算
+            hist = compute_histogram_channel(channel_data, bins, 0.0, 1.0)
+            # 转换为浮点数以便绘制
+            hist_data.append(hist.astype(np.float64))
+        
+        return hist_data
+    except Exception as e:
+        # 记录错误但不抛出异常
+        logger.warning(f"Histogram computation failed: {type(e).__name__}: {e}")
+        return None
 
 
 def compute_waveform_fast(img_array, bins=100, sample_rate=4):
@@ -85,34 +109,61 @@ def compute_waveform_fast(img_array, bins=100, sample_rate=4):
     Returns:
         numpy array of shape [sampled_width, bins] - 亮度波形数据
     """
-    if len(img_array.shape) != 3 or img_array.shape[2] != 3:
+    try:
+        # 数据验证
+        if img_array is None or img_array.size == 0:
+            return None
+        
+        if len(img_array.shape) != 3 or img_array.shape[2] != 3:
+            return None
+        
+        h, w, c = img_array.shape
+        
+        # 水平方向采样以提高性能
+        sampled_width = w // sample_rate
+        if sampled_width == 0:
+            sampled_width = 1
+        
+        # 创建数据副本以避免竞争条件
+        img_copy = img_array.copy()
+        
+        # 确保数据类型正确
+        if img_copy.dtype != np.float32:
+            img_copy = img_copy.astype(np.float32)
+        
+        # 确保数据在有效范围内
+        img_copy = np.clip(img_copy, 0.0, 1.0)
+        
+        # 计算亮度（使用 Rec.709 系数）
+        # Y = 0.2126*R + 0.7152*G + 0.0722*B
+        luma = (img_copy[:, :, 0] * 0.2126 +
+                img_copy[:, :, 1] * 0.7152 +
+                img_copy[:, :, 2] * 0.0722).astype(np.float32)
+        
+        # 确保是C连续数组
+        if not luma.flags['C_CONTIGUOUS']:
+            luma = np.ascontiguousarray(luma)
+        
+        # 创建波形输出数组
+        waveform = np.zeros((sampled_width, bins), dtype=np.float32)
+        
+        # 确保输出数组也是C连续的
+        if not waveform.flags['C_CONTIGUOUS']:
+            waveform = np.ascontiguousarray(waveform)
+        
+        # 使用numba加速的计算函数
+        compute_waveform_channel(luma, waveform, bins, sample_rate)
+        
+        # 归一化
+        max_val = np.max(waveform)
+        if max_val > 0:
+            waveform = waveform / max_val
+        
+        return waveform
+    except Exception as e:
+        # 记录错误但不抛出异常
+        logger.warning(f"Waveform computation failed: {type(e).__name__}: {e}")
         return None
-    
-    h, w, c = img_array.shape
-    
-    # 水平方向采样以提高性能
-    sampled_width = w // sample_rate
-    if sampled_width == 0:
-        sampled_width = 1
-    
-    # 计算亮度（使用 Rec.709 系数）
-    # Y = 0.2126*R + 0.7152*G + 0.0722*B
-    luma = (img_array[:, :, 0] * 0.2126 +
-            img_array[:, :, 1] * 0.7152 +
-            img_array[:, :, 2] * 0.0722).astype(np.float32)
-    
-    # 创建波形输出数组
-    waveform = np.zeros((sampled_width, bins), dtype=np.float32)
-    
-    # 使用numba加速的计算函数
-    compute_waveform_channel(luma, waveform, bins, sample_rate)
-    
-    # 归一化
-    max_val = np.max(waveform)
-    if max_val > 0:
-        waveform = waveform / max_val
-    
-    return waveform
 
 # =========================================================
 # 辅助计算函数 (用于测光)

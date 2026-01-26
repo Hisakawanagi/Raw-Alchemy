@@ -683,10 +683,13 @@ class HistogramWidget(QWidget):
             # 使用utils中的快速计算函数
             self.hist_data = utils.compute_histogram_fast(data, bins=100, sample_rate=4)
             self.update()
-        except (RuntimeError, ValueError, TypeError):
-            pass
-        except Exception as e:
-            logger.error(f"Histogram update error: {type(e).__name__}: {e}")
+        except BaseException as e:
+            # 捕获所有BaseException子类，避免异常处理错误
+            try:
+                logger.error(f"Histogram update error: {type(e).__name__}: {e}")
+            except:
+                # 如果日志记录也失败，完全静默
+                pass
 
     def paintEvent(self, event):
         if not self.hist_data:
@@ -823,12 +826,18 @@ class WaveformWidget(QWidget):
             if data is None or data.size == 0:
                 return
             
-            # 使用utils中的快速计算函数
-            self.waveform_data = utils.compute_waveform_fast(data, bins=100, sample_rate=4)
-            self.update()
-        except (RuntimeError, ValueError, TypeError):
-            pass
-        except Exception as e:
+            # 使用utils中的快速计算函数 - 增加bins数量以提高垂直分辨率
+            waveform_result = utils.compute_waveform_fast(data, bins=150, sample_rate=8)
+            
+            # 检查结果是否有效
+            if waveform_result is not None:
+                self.waveform_data = waveform_result
+                self.update()
+        except (RuntimeError, ValueError, TypeError, OSError, SystemError) as e:
+            # 静默处理这些异常，避免干扰UI
+            logger.warning(f"Waveform update error: {type(e).__name__}: {e}")
+        except BaseException as e:
+            # 捕获所有BaseException子类，避免异常处理错误
             logger.error(f"Waveform update error: {type(e).__name__}: {e}")
 
     def paintEvent(self, event):
@@ -917,18 +926,27 @@ class WaveformWidget(QWidget):
                         # bin (num_bins-1) 对应 109% IRE (顶部)
                         y = h - (bin_idx / float(num_bins - 1) * h)
                         
-                        # 根据密度设置透明度和亮度（增强显示效果）
+                        # 根据密度设置透明度和亮度（大幅增强显示效果）
                         density = column_data[bin_idx]
-                        # 提高基础透明度和密度系数
-                        alpha = int(density * 255) + 100
+                        
+                        # 使用更激进的映射策略，让低密度区域也更明显
+                        # 对密度进行非线性映射，提升低密度值的可见度
+                        enhanced_density = np.power(density, 0.6)  # 0.6次方让低值更明显
+                        
+                        # 大幅提高基础透明度和密度系数
+                        alpha = int(enhanced_density * 200) + 150
                         alpha = min(255, alpha)
                         
                         # 使用灰白色（亮度波形用灰度显示更专业）
-                        # 密度越高，颜色越亮 - 提高基础亮度和密度系数
-                        brightness = int(density * 200) + 120
+                        # 大幅提高基础亮度，让波形更明显
+                        brightness = int(enhanced_density * 150) + 180
                         brightness = min(255, brightness)
                         color = QColor(brightness, brightness, brightness, alpha)
-                        painter.setPen(color)
+                        
+                        # 使用更粗的笔触绘制，提高可见度
+                        pen = QPen(color)
+                        pen.setWidth(2)  # 使用2像素宽度
+                        painter.setPen(pen)
                         
                         # 绘制点
                         painter.drawPoint(int(x), int(y))
