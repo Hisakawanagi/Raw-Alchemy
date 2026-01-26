@@ -1,7 +1,12 @@
+import platform
+import os
+
+# 启用崩溃处理器
+from raw_alchemy.crash_handler import install_crash_handler
+install_crash_handler()
+
 from pathlib import Path
 import sys
-import os
-import platform
 
 # 1. 定义一个用于存放 Matplotlib 缓存的目录
 # Windows通常在 AppData, Mac通常在 ~/Library/Caches
