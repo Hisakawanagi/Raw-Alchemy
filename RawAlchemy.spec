@@ -87,7 +87,7 @@ pyexiv2_hiddenimports = pyexiv2_ret[2]
 binaries_list.extend(pyexiv2_binaries)
 
 a = Analysis(
-    ['src/raw_alchemy/gui.py'],
+    ['src/raw_alchemy/main.py'],
     pathex=[],
     binaries=binaries_list,
     datas=[('src/raw_alchemy/vendor', 'vendor'),('src/raw_alchemy/locales', 'locales'), ('icon.ico', '.'), ('icon.png', '.')],

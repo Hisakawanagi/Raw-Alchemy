@@ -4,7 +4,7 @@ from raw_alchemy import core
 
 # Supported RAW file extensions (lowercase)
 SUPPORTED_RAW_EXTENSIONS = [
-    '.dng', '.cr2', '.cr3', '.nef', '.arw', '.rw2', '.raf', '.orf', '.pef', '.srw', '.x3f'
+    '.dng', '.cr2', '.cr3', '.nef', '.arw', '.rw2', '.raf', '.orf', '.pef', '.srw', '.x3f', 'fff', '3fr'
 ]
 
 def process_path(

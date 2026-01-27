@@ -6,22 +6,18 @@ import numpy as np
 from loguru import logger
 from raw_alchemy import lensfun_wrapper as lf
 import pyexiv2
-try:
-    from raw_alchemy.math_ops_ext import (
-        apply_matrix_inplace,
-        apply_lut_inplace,
-        apply_saturation_contrast_inplace,
-        apply_white_balance_inplace,
-        apply_highlight_shadow_inplace,
-        apply_gain_inplace,
-        linear_to_srgb_inplace,
-        bt709_to_srgb_inplace,
-        compute_histogram_channel,
-        compute_waveform_channel
-    )
-except ImportError:
-    logger.error("Warning: AOT module 'math_ops_ext' not found. Please run 'python src/raw_alchemy/math_ops.py' to compile it.")
-    raise
+from raw_alchemy.math_ops import (
+    apply_matrix_inplace,
+    apply_lut_inplace,
+    apply_saturation_contrast_inplace,
+    apply_white_balance_inplace,
+    apply_highlight_shadow_inplace,
+    apply_gain_inplace,
+    linear_to_srgb_inplace,
+    bt709_to_srgb_inplace,
+    compute_histogram_channel,
+    compute_waveform_channel
+)
 
 
 def resource_path(relative_path):
@@ -409,3 +405,16 @@ def extract_lens_exif(raw_path: str, raw) -> Tuple[dict, pyexiv2.Image]:
     result = {k: v for k, v in result.items() if v}
     
     return result, exif_img
+
+def get_version_info():
+    """Get version and license information"""
+    try:
+        from raw_alchemy import __version__
+        version = __version__
+    except ImportError:
+        version = "0.0.0"
+    
+    current_year = "2025"
+    license_info = f"Copyright © {current_year} Raw Alchemy Team.\nAGPL-V3 License."
+    return version, license_info
+

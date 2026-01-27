@@ -13,9 +13,9 @@ from pathlib import Path
 def get_log_file_path() -> str:
     """获取日志文件路径"""
     # 在用户目录下创建日志文件夹
-    log_dir = Path.home() / ".raw_alchemy" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return str(log_dir / "raw_alchemy.log")
+    log_dir = os.path.expanduser('~/.raw_alchemy/logs')
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, "raw_alchemy.log")
 
 
 # 配置全局 loguru logger
