@@ -111,3 +111,8 @@ def load_app_settings():
 def save_app_settings(settings):
     """Save application settings"""
     _translator.save_app_settings(settings)
+
+def init_i18n():
+    """Initialize i18n (create config dir if needed)"""
+    config_dir = os.path.dirname(_translator.config_file)
+    os.makedirs(config_dir, exist_ok=True)
