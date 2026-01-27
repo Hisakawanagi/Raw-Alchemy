@@ -56,7 +56,6 @@ class MainWindow(FluentWindow):
         self.current_raw_path = None
         self.marked_files = set()
         self.file_params_cache = {}  # path -> params dict
-        self.thumbnail_cache = {}  # path -> original QPixmap
         self.file_baseline_params_cache = {}  # path -> baseline params dict
         
         # Last used paths for file dialogs
@@ -543,7 +542,6 @@ class MainWindow(FluentWindow):
     def add_gallery_item(self, path, image):
         name = os.path.basename(path)
         pixmap = QPixmap.fromImage(image)
-        self.thumbnail_cache[path] = pixmap
         
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, path)
@@ -553,7 +551,6 @@ class MainWindow(FluentWindow):
         item.setText(f"🟢 {name}" if is_marked else name)
         
         self.gallery_list.addItem(item)
-        QApplication.processEvents()
 
     def on_gallery_item_clicked(self, item):
         if not item: return
@@ -751,7 +748,7 @@ class MainWindow(FluentWindow):
                 if self.current_raw_path in self.marked_files: self.marked_files.remove(self.current_raw_path)
                 if self.current_raw_path in self.file_params_cache: del self.file_params_cache[self.current_raw_path]
                 if self.current_raw_path in self.file_baseline_params_cache: del self.file_baseline_params_cache[self.current_raw_path]
-                if self.current_raw_path in self.thumbnail_cache: del self.thumbnail_cache[self.current_raw_path]
+                
                 
                 current_row = self.gallery_list.currentRow()
                 for i in range(self.gallery_list.count()):

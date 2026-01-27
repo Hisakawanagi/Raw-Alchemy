@@ -219,20 +219,26 @@ class InspectorPanel(ScrollArea):
         add_slider('highlight', tr('highlights'), -100, 100, 0, 1)
         add_slider('shadow', tr('shadows'), -100, 100, 0, 1)
         
-        # 按钮布局：保存参数和Reset ALL并排
-        btn_layout = QHBoxLayout()
+        # 按钮布局：保存参数，重置到基准，重置所有
+        btn_layout = QVBoxLayout()
+        btn_layout.setSpacing(10)
+        
         self.save_baseline_btn = PushButton(tr('save_baseline'))
         self.save_baseline_btn.clicked.connect(self.save_baseline_params)
-        self.reset_btn = PushButton(tr('reset_all'))
-        self.reset_btn.setToolTip(tr('long_press_reset'))
-        # 使用事件过滤器实现长按检测
-        self._reset_press_timer = QTimer(self)
-        self._reset_press_timer.setSingleShot(True)
-        self._reset_press_timer.timeout.connect(self._on_long_press_reset)
-        self._reset_long_pressed = False
-        self.reset_btn.installEventFilter(self)
         btn_layout.addWidget(self.save_baseline_btn)
-        btn_layout.addWidget(self.reset_btn)
+        
+        row2_layout = QHBoxLayout()
+        self.reset_baseline_btn = PushButton(tr('reset_baseline'))
+        self.reset_baseline_btn.clicked.connect(self.reset_to_baseline)
+        self.reset_baseline_btn.setEnabled(False)  # Disabled until baseline is saved
+        
+        self.reset_defaults_btn = PushButton(tr('reset_defaults'))
+        self.reset_defaults_btn.clicked.connect(self.reset_to_defaults)
+        
+        row2_layout.addWidget(self.reset_baseline_btn)
+        row2_layout.addWidget(self.reset_defaults_btn)
+        
+        btn_layout.addLayout(row2_layout)
         adj_layout.addLayout(btn_layout)
         
         self.add_section(tr('adjustments'), self.adj_card)
@@ -468,21 +474,17 @@ class InspectorPanel(ScrollArea):
     def save_baseline_params(self):
         """保存当前参数作为基准点"""
         self.saved_baseline_params = self.get_params().copy()
+        self.reset_baseline_btn.setEnabled(True)
         InfoBar.success(tr('baseline_saved'), tr('baseline_saved_message'), parent=self)
 
-    def reset_adjustments(self):
-        """重置到保存的基准点，如果没有保存则重置到默认值"""
+    def reset_to_baseline(self):
+        """重置到保存的基准点"""
         if self.saved_baseline_params:
-            # 重置到保存的基准点
             self.set_params(self.saved_baseline_params)
             self._on_param_change()
-        else:
-            # 重置到默认值
-            for key, (slider, scale, default, name) in self.sliders.items():
-                slider.setValue(int(default * scale))
-            self._on_param_change()
+            # InfoBar.success(tr('reset_to_default'), tr('compare_showing_baseline'), parent=self)
 
-    def reset_params(self):
+    def reset_to_defaults(self):
         self.auto_exp_radio.setChecked(True)  # Default to Auto Exposure
         self.metering_combo.setCurrentText(tr('matrix'))
         self._update_exposure_ui_state()
@@ -503,27 +505,9 @@ class InspectorPanel(ScrollArea):
         
         # Clear saved baseline
         self.saved_baseline_params = None
+        self.reset_baseline_btn.setEnabled(False)
+        
         # Trigger parameter change
         self._on_param_change()
-    
-    def eventFilter(self, obj, event):
-        """Event filter for long-press detection on reset button"""
-        # Guard against calls during initialization before reset_btn exists
-        if hasattr(self, 'reset_btn') and obj == self.reset_btn:
-            if event.type() == QEvent.MouseButtonPress:
-                self._reset_long_pressed = False
-                self._reset_press_timer.start(1000)  # 1 second for long press
-                return False  # Don't consume the event
-            elif event.type() == QEvent.MouseButtonRelease:
-                self._reset_press_timer.stop()
-                if not self._reset_long_pressed:
-                    # Short press: reset to baseline
-                    self.reset_adjustments()
-                return True  # Consume the event to prevent clicked signal
-        return super().eventFilter(obj, event)
-    
-    def _on_long_press_reset(self):
-        """Handle long press on reset button - reset to initial defaults"""
-        self._reset_long_pressed = True
-        self.reset_params()
+        
         InfoBar.success(tr('reset_to_default'), tr('reset_to_default_message'), parent=self)

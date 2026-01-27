@@ -24,6 +24,8 @@
     "adjustments": "调整",
     "save_baseline": "保存基准",
     "reset_all": "重置所有",
+    "reset_baseline": "重置到基准",
+    "reset_defaults": "重置到默认",
     "long_press_reset": "长按可重置到初始值",
     "reset_to_default": "已重置",
     "reset_to_default_message": "所有参数已重置到初始默认值",

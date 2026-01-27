@@ -24,6 +24,8 @@
     "adjustments": "Adjustments",
     "save_baseline": "Save Baseline",
     "reset_all": "Reset All",
+    "reset_baseline": "Reset to Baseline",
+    "reset_defaults": "Reset to Defaults",
     "long_press_reset": "Long press to reset to initial values",
     "reset_to_default": "Reset Complete",
     "reset_to_default_message": "All parameters reset to initial defaults",
