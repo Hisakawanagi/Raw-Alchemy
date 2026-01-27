@@ -54,12 +54,39 @@ class ThumbnailWorker(QThread):
                         elif thumb.format == rawpy.ThumbFormat.BITMAP:
                             # 处理未压缩的缩略图
                             image = QImage(thumb.data, thumb.width, thumb.height, QImage.Format_RGB888)
+                    else:
+                        # Fallback: calculate thumbnail from raw data if extraction fails
+                        try:
+                            # use_camera_wb=True: 使用相机白平衡
+                            # half_size=True: 半尺寸解码 (速度快)
+                            # user_flip=None: 自动根据元数据旋转
+                            thumb_array = raw.postprocess(
+                                use_camera_wb=True,
+                                bright=1.0,
+                                user_sat=None,
+                                no_auto_bright=False,
+                                half_size=True,
+                                user_flip=None
+                            )
+                            
+                            if thumb_array is not None:
+                                height, width, channel = thumb_array.shape
+                                # Create QImage from data. Must use copy() as data is from local numpy array
+                                image = QImage(
+                                    thumb_array.data, 
+                                    width, 
+                                    height, 
+                                    3 * width, 
+                                    QImage.Format_RGB888
+                                ).copy()
+                                # Ensure orientation is 0 since postprocess(user_flip=None) already handles rotation
+                                orientation = 0
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
-            # 3. 缩略图处理失败，不做任何操作，直接返回None (不进行完整解码，太慢)
-            # 如果需要更高可靠性，可以在这里添加 fallback，但要注意性能影响
-            
+            # 3. 缩略图处理失败，不做任何操作，直接返回None            
             # 4. 统一缩放 & 旋转
             if image and not image.isNull():
                 # Apply rotation based on orientation
