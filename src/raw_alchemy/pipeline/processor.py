@@ -215,7 +215,6 @@ class ImageProcessor(QThread):
             self.last_metering_key = None
             
             self.exif_data = None
-            self.exif_data = None
             self.current_path = path
             
             # Reset LUT cache if image changes? Actually LUT is global global param usually, 
@@ -313,15 +312,25 @@ class ImageProcessor(QThread):
                 if self.cached_linear is not None:
                      cached_item = self.cache_manager.get(request.path)
                      if cached_item:
+                         # 检查是否是首次添加 corrected_data（避免重复累加内存大小）
+                         is_first_correction = (cached_item.corrected_data is None)
+                         
+                         # 如果之前已有 corrected_data，先减去旧的大小
+                         if not is_first_correction:
+                             old_corrected_size = cached_item.corrected_data.nbytes / (1024 * 1024)
+                             cached_item.size_mb -= old_corrected_size
+                             self.cache_manager.current_memory_mb -= old_corrected_size
+                         
+                         # 更新 corrected_data 和 lens_key
                          cached_item.corrected_data = self.cached_corrected
                          cached_item.lens_key = current_lens_key
-                         # We don't need to put() again as get() returns reference and we modified object
-                         # But we might need to update size tracking in manager? 
-                         # For simplicity, let's just re-put to trigger size recalc if we wanted to be strict,
-                         # but for now updating the object is fine as size_mb is static in my simple implementation.
-                         # Actually size_mb IS calculated in __init__, so I should update it.
-                         cached_item.size_mb += self.cached_corrected.nbytes / (1024 * 1024)
-                         self.cache_manager.current_memory_mb += self.cached_corrected.nbytes / (1024 * 1024)
+                         
+                         # 添加新的 corrected_data 大小
+                         new_corrected_size = self.cached_corrected.nbytes / (1024 * 1024)
+                         cached_item.size_mb += new_corrected_size
+                         self.cache_manager.current_memory_mb += new_corrected_size
+                         
+                         # 检查是否需要驱逐缓存项
                          self.cache_manager._evict_if_needed()
              
             
