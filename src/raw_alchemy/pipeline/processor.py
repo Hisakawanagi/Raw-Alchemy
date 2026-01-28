@@ -312,25 +312,25 @@ class ImageProcessor(QThread):
                 if self.cached_linear is not None:
                      cached_item = self.cache_manager.get(request.path)
                      if cached_item:
-                         # ??¥”Û¥ñŸ“Y‰Á corrected_datai”ğ–Æd?—İ‰Á“à‘¶‘å¬j
+                         # æ£€æŸ¥æ˜¯å¦æ˜¯é¦–æ¬¡æ·»åŠ  corrected_dataï¼ˆé¿å…é‡å¤ç´¯åŠ å†…å­˜å¤§å°ï¼‰
                          is_first_correction = (cached_item.corrected_data is None)
                          
-                         # ”@‰Ê”V‘O›ß—L corrected_dataCæ?‹‹Œ“I‘å¬
+                         # å¦‚æœä¹‹å‰å·²æœ‰ corrected_dataï¼Œå…ˆå‡å»æ—§çš„å¤§å°
                          if not is_first_correction:
                              old_corrected_size = cached_item.corrected_data.nbytes / (1024 * 1024)
                              cached_item.size_mb -= old_corrected_size
                              self.cache_manager.current_memory_mb -= old_corrected_size
                          
-                         # XV corrected_data ˜a lens_key
+                         # æ›´æ–° corrected_data å’Œ lens_key
                          cached_item.corrected_data = self.cached_corrected
                          cached_item.lens_key = current_lens_key
                          
-                         # “Y‰ÁV“I corrected_data ‘å¬
+                         # æ·»åŠ æ–°çš„ corrected_data å¤§å°
                          new_corrected_size = self.cached_corrected.nbytes / (1024 * 1024)
                          cached_item.size_mb += new_corrected_size
                          self.cache_manager.current_memory_mb += new_corrected_size
                          
-                         # ??¥”Ûù—v?’€?‘¶?
+                         # æ£€æŸ¥æ˜¯å¦éœ€è¦é©±é€ç¼“å­˜é¡¹
                          self.cache_manager._evict_if_needed()
              
             
