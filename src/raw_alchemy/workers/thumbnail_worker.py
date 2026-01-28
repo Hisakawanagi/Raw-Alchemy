@@ -5,6 +5,8 @@ import concurrent.futures
 from loguru import logger
 import rawpy
 
+from raw_alchemy.config import SUPPORTED_RAW_EXTENSIONS
+
 class ThumbnailWorker(QThread):
     """
     Scan folder and generate thumbnails - 优化版本使用线程池
@@ -28,7 +30,7 @@ class ThumbnailWorker(QThread):
         try:
             # 1. 快速检查文件扩展名
             ext = os.path.splitext(full_path)[1].lower()
-            if ext not in ['.arw', '.cr2', '.nef', '.dng', '.orf', '.rw2', '.raf', '.orf', '.pef', '.srw', '.x3f', 'fff', '3fr']: 
+            if ext not in SUPPORTED_RAW_EXTENSIONS:
                 return None
 
             image = None
@@ -108,7 +110,7 @@ class ThumbnailWorker(QThread):
 
     def run(self):
         # 1. Scan folder
-        valid_extensions = {'.arw', '.cr2', '.nef', '.dng', '.orf', '.rw2', '.raf', '.orf', '.pef', '.srw', '.x3f', 'fff', '3fr'}
+        valid_extensions = SUPPORTED_RAW_EXTENSIONS
         files = []
         try:
             with os.scandir(self.folder_path) as entries:
