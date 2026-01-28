@@ -33,6 +33,8 @@ from raw_alchemy.ui.widgets.waveform import WaveformWidget
 from raw_alchemy.ui.widgets.gallery_item import GalleryItem
 from raw_alchemy.ui.widgets.inspector_panel import InspectorPanel
 from raw_alchemy.ui.widgets.title_bar import CenteredFluentTitleBar
+from raw_alchemy.ui.widgets.about_panel import AboutPanel
+from raw_alchemy.ui.widgets.help_panel import HelpPanel
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -366,117 +368,14 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.settings_widget, FIF.SETTING, tr('settings'))
 
     def create_help_interface(self):
-        self.help_widget = QWidget()
-        self.help_widget.setObjectName("helpWidget")
-        
-        help_scroll = ScrollArea(self.help_widget)
-        help_scroll.setWidgetResizable(True)
-        help_scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
-        
-        help_content = QWidget()
-        help_content.setStyleSheet("#helpContent { background-color: transparent; }")
-        help_layout = QVBoxLayout(help_content)
-        help_layout.setContentsMargins(40, 40, 40, 40)
-        
-        help_layout.addWidget(SubtitleLabel(tr('help_title')))
-        
-        for title, text in [
-            (tr('help_overview'), tr('help_overview_text')),
-            (tr('help_workflow'), tr('help_workflow_text')),
-            (tr('help_shortcuts'), tr('help_shortcuts_text')),
-        ]:
-            card = SimpleCardWidget()
-            l = QVBoxLayout(card)
-            l.addWidget(StrongBodyLabel(title))
-            lbl = BodyLabel(text)
-            lbl.setWordWrap(True)
-            l.addWidget(lbl)
-            help_layout.addWidget(card)
-        
-        help_layout.addStretch()
-        help_scroll.setWidget(help_content)
-        
-        help_widget_layout = QVBoxLayout(self.help_widget)
-        help_widget_layout.setContentsMargins(0, 0, 0, 0)
-        help_widget_layout.addWidget(help_scroll)
-        
-        self.addSubInterface(self.help_widget, FIF.QUESTION, tr('help'))
+        """Create help interface"""
+        self.help_panel = HelpPanel()
+        self.addSubInterface(self.help_panel, FIF.QUESTION, tr('help'))
 
     def create_about_interface(self):
-        self.about_widget = QWidget()
-        about_layout = QVBoxLayout(self.about_widget)
-        about_layout.setContentsMargins(40, 40, 40, 40)
-        
-        version = '0.0.0'
-        try:
-            from raw_alchemy import __version__
-            version = __version__
-        except (ImportError, AttributeError):
-            pass  # 使用默认版本号
-        
-        about_layout.addWidget(SubtitleLabel(tr('about_title')))
-        
-        version_card = SimpleCardWidget()
-        vl = QVBoxLayout(version_card)
-        vl.addWidget(StrongBodyLabel(tr('about_version')))
-        vl.addWidget(BodyLabel(version))
-        
-        self.check_update_btn = PushButton(tr('check_update'))
-        self.check_update_btn.clicked.connect(self.check_for_updates)
-        vl.addWidget(self.check_update_btn)
-        
-        self.export_logs_btn = PushButton(tr('export_logs'))
-        self.export_logs_btn.clicked.connect(self.export_logs)
-        vl.addWidget(self.export_logs_btn)
-        
-        about_layout.addWidget(version_card)
-        about_layout.addStretch()
-        
-        self.about_widget.setObjectName("aboutInterface")
-        
-        self.addSubInterface(self.about_widget, FIF.INFO, tr('about'))
-
-    def check_for_updates(self):
-        self.check_update_btn.setEnabled(False)
-        self.check_update_btn.setText(tr('checking_update'))
-        # Need current version
-        version = '0.0.0'
-        try:
-            from raw_alchemy import __version__
-            version = __version__
-        except (ImportError, AttributeError):
-            pass  # 使用默认版本号
-        
-        self.version_worker = VersionCheckWorker(version)
-        self.version_worker.version_checked.connect(self.on_version_checked)
-        self.version_worker.start()
-
-    def on_version_checked(self, success, latest_version, error_msg):
-        self.check_update_btn.setEnabled(True)
-        self.check_update_btn.setText(tr('check_update'))
-        
-        if not success:
-            InfoBar.error(tr('update_check_failed'), tr('update_check_error', error=error_msg), parent=self)
-            return
-            
-        InfoBar.success(tr('no_update'), tr('no_update_message', version=latest_version), parent=self)
-
-    def export_logs(self):
-        from raw_alchemy.logger import get_log_file_path
-        log_file = get_log_file_path()
-        if not os.path.exists(log_file):
-            InfoBar.warning(tr('no_logs_found'), tr('no_logs_found'), parent=self)
-            return
-            
-        default_name = f"raw_alchemy_logs_{time.strftime('%Y%m%d_%H%M%S')}.log"
-        save_path, _ = QFileDialog.getSaveFileName(self, tr('export_logs'), default_name, "Log Files (*.log);;All Files (*)")
-        
-        if save_path:
-            try:
-                shutil.copy2(log_file, save_path)
-                InfoBar.success(tr('export_logs_success'), tr('logs_saved_to', path=save_path), parent=self)
-            except Exception as e:
-                InfoBar.error(tr('export_logs_failed'), str(e), parent=self)
+        """Create about interface"""
+        self.about_panel = AboutPanel()
+        self.addSubInterface(self.about_panel, FIF.INFO, tr('about'))
 
     def on_language_changed(self, index):
         lang_code = 'en' if index == 0 else 'zh'

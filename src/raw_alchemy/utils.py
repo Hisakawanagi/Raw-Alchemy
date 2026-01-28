@@ -415,6 +415,6 @@ def get_version_info():
         version = "0.0.0"
     
     current_year = "2025"
-    license_info = f"Copyright © {current_year} Raw Alchemy Team.\nAGPL-V3 License."
+    license_info = f"Copyright © {current_year} MinQ.\nAGPL-V3 License."
     return version, license_info
 
