@@ -411,7 +411,8 @@ class MainWindow(FluentWindow):
         try:
             from raw_alchemy import __version__
             version = __version__
-        except: pass
+        except (ImportError, AttributeError):
+            pass  # 使用默认版本号
         
         about_layout.addWidget(SubtitleLabel(tr('about_title')))
         
@@ -443,7 +444,8 @@ class MainWindow(FluentWindow):
         try:
             from raw_alchemy import __version__
             version = __version__
-        except: pass
+        except (ImportError, AttributeError):
+            pass  # 使用默认版本号
         
         self.version_worker = VersionCheckWorker(version)
         self.version_worker.version_checked.connect(self.on_version_checked)
@@ -657,7 +659,8 @@ class MainWindow(FluentWindow):
             self.right_panel.auto_ev_value = applied_ev
             try:
                 self.right_panel.exp_slider.valueChanged.disconnect(self.right_panel.exp_slider_callback)
-            except: pass
+            except (TypeError, RuntimeError):
+                pass  # 信号未连接或已断开
             self.right_panel.exp_slider.setValue(int(applied_ev * 10))
             self.right_panel.exp_slider.update()
             self.right_panel.exp_value_label.setText(f"{tr('exposure_ev')}: {applied_ev:+.1f}")

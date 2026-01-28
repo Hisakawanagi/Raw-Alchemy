@@ -50,8 +50,8 @@ class HistogramWidget(QWidget):
             # 捕获所有BaseException子类，避免异常处理错误
             try:
                 logger.error(f"Histogram update error: {type(e).__name__}: {e}")
-            except:
-                # 如果日志记录也失败，完全静默
+            except Exception:
+                # 如果日志记录也失败，完全静默（不捕获系统级异常）
                 pass
 
     def paintEvent(self, event):

@@ -89,8 +89,9 @@ class CrashHandler:
                 msg.setInformativeText(f"Check log for details: {self.log_path}")
                 msg.setDetailedText(error_msg)
                 msg.exec()
-        except:
-            pass
+        except Exception as e:
+            # 崩溃对话框显示失败（例如 GUI 未初始化），记录警告后继续
+            logger.warning(f"⚠️ Failed to show crash dialog: {e}")
 
 # 全局崩溃处理器实例
 _crash_handler = None
