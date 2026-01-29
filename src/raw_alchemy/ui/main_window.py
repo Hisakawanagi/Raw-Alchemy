@@ -370,11 +370,13 @@ class MainWindow(FluentWindow):
     def create_help_interface(self):
         """Create help interface"""
         self.help_panel = HelpPanel()
+        self.help_panel.setObjectName("helpInterface")
         self.addSubInterface(self.help_panel, FIF.QUESTION, tr('help'))
 
     def create_about_interface(self):
         """Create about interface"""
         self.about_panel = AboutPanel()
+        self.about_panel.setObjectName("aboutInterface")
         self.addSubInterface(self.about_panel, FIF.INFO, tr('about'))
 
     def on_language_changed(self, index):
@@ -800,7 +802,11 @@ class MainWindow(FluentWindow):
                         saturation=p.get('saturation', 1.0),
                         contrast=p.get('contrast', 1.0),
                         highlight=p.get('highlight', 0.0),
-                        shadow=p.get('shadow', 0.0)
+                        shadow=p.get('shadow', 0.0),
+                        # Geometry
+                        rotation=p.get('rotation', 0),
+                        flip_horizontal=p.get('flip_horizontal', False),
+                        flip_vertical=p.get('flip_vertical', False)
                     )
                     self.finished_sig.emit(True, "")
                 except Exception as e:

@@ -38,6 +38,9 @@ class ImageProcessor(QThread):
         self.cached_lens_key = None
         
         # New Caching Layers
+        self.cached_geometry = None     # Layer 0.5: After Geometry
+        self.last_geometry_key = None
+
         self.cached_exposed = None      # Layer 1: After Exposure Gain
         self.last_exposure_key = None
         
@@ -187,6 +190,8 @@ class ImageProcessor(QThread):
             self.cached_corrected = cached_item.corrected_data
             
             # Reset pipeline caches for new image context
+            self.cached_geometry = None
+            self.last_geometry_key = None
             self.cached_exposed = None
             self.last_exposure_key = None
             self.cached_adjusted = None
@@ -207,6 +212,8 @@ class ImageProcessor(QThread):
             self.cached_corrected = None
             self.cached_lens_key = None
             
+            self.cached_geometry = None
+            self.last_geometry_key = None
             self.cached_exposed = None
             self.last_exposure_key = None
             self.cached_adjusted = None
@@ -303,6 +310,8 @@ class ImageProcessor(QThread):
                 # Invalidate dev cache since base changed
                 self.cached_lens_key = current_lens_key
                 # Invalidate dev cache since base changed
+                self.cached_geometry = None # Invalidate downstream
+                self.last_geometry_key = None
                 self.cached_exposed = None
                 self.last_exposure_key = None
                 self.cached_adjusted = None
@@ -334,14 +343,44 @@ class ImageProcessor(QThread):
                          self.cache_manager._evict_if_needed()
              
             
+            # --- Stage 2.5: Geometry (Rotation/Flip) ---
+            geometry_key = (
+                self.cached_lens_key,
+                params.get('rotation', 0),
+                params.get('flip_horizontal', False),
+                params.get('flip_vertical', False)
+            )
+
+            if geometry_key == self.last_geometry_key and self.cached_geometry is not None:
+                # logger.debug(f"[Worker] Layer 2.5 (Geometry) Cache Hit")
+                pass
+            else:
+                logger.debug(f"[Worker] Layer 2.5 (Geometry) Computing...")
+                # Apply geometry to corrected image
+                # Since utils.apply_geometry returns a copy (usually), we are safe
+                self.cached_geometry = utils.apply_geometry(
+                    self.cached_corrected, 
+                    rotation=params.get('rotation', 0),
+                    flip_h=params.get('flip_horizontal', False),
+                    flip_v=params.get('flip_vertical', False)
+                )
+                self.last_geometry_key = geometry_key
+                # Invalidate next layers
+                self.cached_exposed = None
+                self.last_exposure_key = None
+                self.cached_adjusted = None
+                self.last_adjustment_key = None
+
             # --- Stage 3: Exposure (Layer 1) ---
             # Define metering key to avoid re-calculating auto exposure when only sliders allow
             # We ONLY re-calc auto exposure if:
             # 1. Lens correction changed (implied by execution flow reaching here)
             # 2. Metering mode changed
             # 3. Image changed
+            # 4. Geometry changed
             current_metering_key = (
                 self.cached_lens_key,
+                self.last_geometry_key,
                 params.get('metering_mode', 'matrix')
             )
             
@@ -364,10 +403,9 @@ class ImageProcessor(QThread):
                     logger.debug(f"[Worker] Calculating Auto Exposure (Cache Miss)...")
                     source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
                     mode = params.get('metering_mode', 'matrix')
-                    # Use corrected image for metering
-                    # Fix: Use calculate_gain directly to avoid modifying cached_corrected in-place
+                    # Use geometry-corrected image for metering
                     strategy = metering.get_metering_strategy(mode)
-                    gain = strategy.calculate_gain(self.cached_corrected, source_cs)
+                    gain = strategy.calculate_gain(self.cached_geometry, source_cs)
                     
                     self.cached_auto_ev = np.log2(gain)
                     self.last_metering_key = current_metering_key
@@ -378,6 +416,7 @@ class ImageProcessor(QThread):
             # Exposure Key for Pixel Cache
             exposure_key = (
                 self.cached_lens_key,
+                self.last_geometry_key,
                 final_exposure_gain
             )
             
@@ -386,7 +425,7 @@ class ImageProcessor(QThread):
                 img_exposed = self.cached_exposed # No copy needed yet, read-only
             else:
                 logger.debug(f"[Worker] Layer 1 (Exposure) Computing...")
-                img_exposed = self.cached_corrected.copy()
+                img_exposed = self.cached_geometry.copy()
                 utils.apply_gain_inplace(img_exposed, final_exposure_gain)
                 
                 self.cached_exposed = img_exposed

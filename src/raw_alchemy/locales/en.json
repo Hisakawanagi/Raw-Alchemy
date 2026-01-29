@@ -131,5 +131,12 @@
     "export_logs_success": "Logs Exported Successfully",
     "export_logs_failed": "Failed to Export Logs",
     "logs_saved_to": "Logs saved to: {path}",
-    "no_logs_found": "No log files found"
+    "no_logs_found": "No log files found",
+    "geometry": "Geometry",
+    "rotation": "Rotation",
+    "rotate_left": "Rotate Left",
+    "rotate_right": "Rotate Right",
+    "fine_tune": "Fine Tune",
+    "flip_horizontal": "Flip Horizontal",
+    "flip_vertical": "Flip Vertical"
 }

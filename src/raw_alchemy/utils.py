@@ -18,7 +18,7 @@ from raw_alchemy.math_ops import (
     compute_histogram_channel,
     compute_waveform_channel
 )
-
+from scipy import ndimage
 
 def resource_path(relative_path):
     """
@@ -417,4 +417,54 @@ def get_version_info():
     current_year = "2025"
     license_info = f"Copyright © {current_year} MinQ.\nAGPL-V3 License."
     return version, license_info
+
+def apply_geometry(img: np.ndarray, rotation: int = 0, flip_h: bool = False, flip_v: bool = False) -> np.ndarray:
+    """
+    应用几何变换（旋转和翻转）
+    rotation: degrees clockwise. If divisible by 90, uses fast numpy.rot90, 
+              otherwise uses higher quality interpolation.
+    """
+    if rotation == 0 and not flip_h and not flip_v:
+        return img
+    
+    out = img
+    
+    # Rotation
+    # Normalize rotation to [0, 360)
+    rotation = rotation % 360
+    
+    # 1. Fast 90-degree steps rotation
+    if rotation % 90 == 0:
+        k = 0
+        if rotation == 90:
+            k = -1 # numpy rot90 is CCW
+        elif rotation == 180:
+            k = 2
+        elif rotation == 270:
+            k = 1
+            
+        if k != 0:
+            out = np.rot90(out, k=k)
+            
+    # 2. Arbitrary angle rotation
+    else:
+        # ndimage.rotate uses CCW angle, so we use -rotation
+        # reshape=True ensures the whole image is kept
+        # order=3 (cubic) or order=1 (bilinear). Keep order=1 for speed in preview? 
+        # Actually for quality we might want 3, but let's stick to default or 1 for responsiveness first.
+        # User requested "specific angle", so let's allow arbitrary.
+        # Note: This is computationally expensive!
+        out = ndimage.rotate(out, -rotation, reshape=True, order=1, prefilter=False)
+        
+    if flip_h:
+        out = np.fliplr(out)
+        
+    if flip_v:
+        out = np.flipud(out)
+        
+    # Ensure contiguous
+    if not out.flags['C_CONTIGUOUS']:
+        out = np.ascontiguousarray(out)
+        
+    return out
 

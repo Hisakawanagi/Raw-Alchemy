@@ -59,6 +59,75 @@ class InspectorPanel(ScrollArea):
         self.v_layout.addWidget(self.hist_widget)
         self.v_layout.addWidget(self.waveform_widget)
 
+        # --- Geometry ---
+        self.geo_card = SimpleCardWidget()
+        geo_layout = QVBoxLayout(self.geo_card)
+        geo_layout.setSpacing(10)
+        
+        # Rotation Buttons (Row)
+        rot_layout = QHBoxLayout()
+        # Rotation state
+        
+        self.rot_left_btn = ToolButton(FIF.ROTATE) # Using standard rotate icon
+        self.rot_left_btn.setToolTip(tr('rotate_left'))
+        self.rot_left_btn.clicked.connect(self._rotate_left)
+        
+        self.rot_right_btn = ToolButton(FIF.ROTATE)
+        self.rot_right_btn.setToolTip(tr('rotate_right'))
+        self.rot_right_btn.clicked.connect(self._rotate_right)
+        
+        # Arbitrary Rotation Slider
+        self.rot_slider = Slider(Qt.Orientation.Horizontal)
+        self.rot_slider.setRange(-45, 45) # +/- 45 degrees fine tuning
+        self.rot_slider.setValue(0)
+        self.rot_slider.valueChanged.connect(self._on_rot_slider_changed)
+        
+        self.rot_value_label = BodyLabel("0°")
+        self.rot_value_label.setFixedWidth(40)
+        self.rot_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        rot_control_layout = QVBoxLayout()
+        
+        # 90 degree buttons row
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(BodyLabel(tr('rotation')))
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.rot_left_btn)
+        btn_row.addWidget(self.rot_right_btn)
+        
+        # Fine tune row
+        slider_row = QHBoxLayout()
+        slider_row.addWidget(BodyLabel(tr('fine_tune')))
+        slider_row.addWidget(self.rot_slider)
+        slider_row.addWidget(self.rot_value_label)
+        
+        rot_control_layout.addLayout(btn_row)
+        rot_control_layout.addLayout(slider_row)
+        
+        rot_layout.addLayout(rot_control_layout)
+
+        # Flip Switches (Row)
+        flip_layout = QHBoxLayout()
+        
+        self.flip_h_switch = SwitchButton(tr('flip_horizontal'))
+        self.flip_h_switch.checkedChanged.connect(self._on_param_change)
+        
+        self.flip_v_switch = SwitchButton(tr('flip_vertical'))
+        self.flip_v_switch.checkedChanged.connect(self._on_param_change)
+        
+        flip_layout.addWidget(self.flip_h_switch)
+        flip_layout.addWidget(self.flip_v_switch)
+        flip_layout.addStretch(1)
+
+        geo_layout.addLayout(flip_layout)
+        geo_layout.addLayout(rot_layout)
+        
+        self.add_section(tr('geometry'), self.geo_card)
+        
+        # Initialize internal rotation state
+        self.base_rotation = 0 # 0, 90, 180, 270
+        self.fine_rotation = 0 # -45 to 45
+
         # --- Exposure ---
         self.exp_card = SimpleCardWidget()
         exp_layout = QVBoxLayout(self.exp_card)
@@ -294,11 +363,35 @@ class InspectorPanel(ScrollArea):
         # Lens Correction
         if 'lens_correct' in params:
             self.lens_correct_switch.setChecked(params['lens_correct'])
-        
-        if 'custom_db_path' in params and params['custom_db_path']:
+            
+        if 'custom_db_path' in params:
             self.db_path_edit.setText(params['custom_db_path'])
         else:
             self.db_path_edit.clear()
+            
+        # Geometry
+        if 'rotation' in params:
+            # We need to decompose total rotation back into base (90 steps) + fine
+            # This is tricky because 95 could be 90 + 5 or 0 + 95 (out of slider range)
+            # Let's simple logic: find nearest 90 degree step
+            rot = params['rotation']
+            base = round(rot / 90.0) * 90
+            fine = rot - base
+            
+            self.base_rotation = int(base % 360)
+            self.fine_rotation = int(fine)
+            
+            # Update UI
+            self.rot_slider.blockSignals(True)
+            self.rot_slider.setValue(self.fine_rotation)
+            self.rot_slider.blockSignals(False)
+            self.rot_value_label.setText(f"{self.fine_rotation}°")
+        
+        if 'flip_horizontal' in params:
+            self.flip_h_switch.setChecked(params['flip_horizontal'])
+            
+        if 'flip_vertical' in params:
+            self.flip_v_switch.setChecked(params['flip_vertical'])
             
         # Sliders
         for key, (slider, scale, _, name) in self.sliders.items():
@@ -440,6 +533,23 @@ class InspectorPanel(ScrollArea):
         
         self._on_param_change()
 
+    def _rotate_left(self):
+        self.base_rotation = (self.base_rotation - 90) % 360
+        self._on_param_change()
+        
+    def _rotate_right(self):
+        self.base_rotation = (self.base_rotation + 90) % 360
+        self._on_param_change()
+
+    def _on_rot_slider_changed(self, value):
+        self.fine_rotation = value
+        self.rot_value_label.setText(f"{value}°")
+        self._on_param_change() # This needs debounce for slider!
+        # Slider valueChanged connects to this, but we might want debouncing for heavy rotate ops
+        # InspectorPanel uses _on_param_change which emits param_changed
+        # MainWindow connects param_changed to update_timer (debounce 100ms)
+        # So it should be fine.
+
     def _on_param_change(self):
         self.param_changed.emit(self.get_params())
         
@@ -462,7 +572,20 @@ class InspectorPanel(ScrollArea):
             'lut_path': os.path.join(self.lut_folder, self.lut_combo.currentText()) if self.lut_folder and self.lut_combo.currentText() != tr('none') else None,
             
             'lens_correct': self.lens_correct_switch.isChecked(),
-            'custom_db_path': self.db_path_edit.text() if self.db_path_edit.text() else None
+            'custom_db_path': self.db_path_edit.text() if self.db_path_edit.text() else None,
+            
+            # Geometry
+            # Combine base and fine rotation
+            'rotation': (self.base_rotation + self.fine_rotation) % 360, 
+            # We pass total rotation. The processor/utils handles it.
+            # Warning: floating point rotation vs integer 90 steps.
+            # Our utils.apply_geometry currently takes int. Let's make it float-capable or just pass sum.
+            # Utils was edited to take int but handled as generic number locally? 
+            # Actually python types are dynamic but type hint said int. 
+            # ndimage.rotate takes float angle.
+            
+            'flip_horizontal': self.flip_h_switch.isChecked(),
+            'flip_vertical': self.flip_v_switch.isChecked()
         }
         
         # Add sliders
@@ -495,6 +618,14 @@ class InspectorPanel(ScrollArea):
         self.lut_combo.setCurrentIndex(0)
         self.lens_correct_switch.setChecked(True)  # Default enabled
         self.db_path_edit.clear()
+        
+        # Geometry defaults
+        self.base_rotation = 0
+        self.fine_rotation = 0
+        self.rot_slider.setValue(0)
+        self.rot_value_label.setText("0°")
+        self.flip_h_switch.setChecked(False)
+        self.flip_v_switch.setChecked(False)
         
         # Reset sliders
         for key, (slider, scale, default, name) in self.sliders.items():

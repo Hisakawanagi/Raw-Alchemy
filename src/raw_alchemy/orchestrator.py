@@ -23,6 +23,10 @@ def process_path(
     contrast: float = 1.1,
     highlight: float = 0.0,
     shadow: float = 0.0,
+    # Geometry
+    rotation: int = 0,
+    flip_horizontal: bool = False,
+    flip_vertical: bool = False,
 ):
     """
     Orchestrates the processing of a single file or a directory of files.
@@ -87,6 +91,9 @@ def process_path(
                     contrast=contrast,
                     highlight=highlight,
                     shadow=shadow,
+                    rotation=rotation,
+                    flip_horizontal=flip_horizontal,
+                    flip_vertical=flip_vertical,
                 ): filename for filename in raw_files
             }
             
@@ -137,6 +144,9 @@ def process_path(
                 contrast=contrast,
                 highlight=highlight,
                 shadow=shadow,
+                rotation=rotation,
+                flip_horizontal=flip_horizontal,
+                flip_vertical=flip_vertical,
             )
         finally:
             # 发送完成信号

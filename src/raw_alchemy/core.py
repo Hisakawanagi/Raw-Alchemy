@@ -34,6 +34,10 @@ def process_image(
     contrast: float = 1.1,
     highlight: float = 0.0,
     shadow: float = 0.0,
+    # Geometry
+    rotation: int = 0,
+    flip_horizontal: bool = False,
+    flip_vertical: bool = False,
 ):
     filename = os.path.basename(raw_path)
     
@@ -91,6 +95,11 @@ def process_image(
             exif_data=exif_data,
             custom_db_path=custom_db_path
         )
+            
+    # 3.1.5 几何变换
+    if rotation != 0 or flip_horizontal or flip_vertical:
+        logger.info(f"  🔹 [Step 3.1.5] Geometry (Rot:{rotation}, FlipH:{flip_horizontal}, FlipV:{flip_vertical})...")
+        img = utils.apply_geometry(img, rotation, flip_horizontal, flip_vertical)
     
     # 3.2 白平衡
     if wb_temp != 0.0 or wb_tint != 0.0:

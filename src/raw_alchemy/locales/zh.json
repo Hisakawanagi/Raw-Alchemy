@@ -131,5 +131,12 @@
     "export_logs_success": "日志导出成功",
     "export_logs_failed": "日志导出失败",
     "logs_saved_to": "日志已保存至: {path}",
-    "no_logs_found": "未找到日志文件"
+    "no_logs_found": "未找到日志文件",
+    "geometry": "几何调整",
+    "rotation": "旋转",
+    "rotate_left": "向左旋转",
+    "rotate_right": "向右旋转",
+    "fine_tune": "微调",
+    "flip_horizontal": "水平翻转",
+    "flip_vertical": "垂直翻转"
 }
