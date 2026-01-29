@@ -33,8 +33,6 @@ from raw_alchemy.ui.widgets.waveform import WaveformWidget
 from raw_alchemy.ui.widgets.gallery_item import GalleryItem
 from raw_alchemy.ui.widgets.inspector_panel import InspectorPanel
 from raw_alchemy.ui.widgets.title_bar import CenteredFluentTitleBar
-from raw_alchemy.ui.widgets.about_panel import AboutPanel
-from raw_alchemy.ui.widgets.help_panel import HelpPanel
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -74,8 +72,6 @@ class MainWindow(FluentWindow):
         
         self.create_ui()
         self.create_settings_interface()
-        self.create_help_interface()
-        self.create_about_interface()
         
         # Workers
         self.thumb_worker = None
@@ -366,18 +362,6 @@ class MainWindow(FluentWindow):
         
         self.settings_widget.setObjectName("settingsInterface")
         self.addSubInterface(self.settings_widget, FIF.SETTING, tr('settings'))
-
-    def create_help_interface(self):
-        """Create help interface"""
-        self.help_panel = HelpPanel()
-        self.help_panel.setObjectName("helpInterface")
-        self.addSubInterface(self.help_panel, FIF.QUESTION, tr('help'))
-
-    def create_about_interface(self):
-        """Create about interface"""
-        self.about_panel = AboutPanel()
-        self.about_panel.setObjectName("aboutInterface")
-        self.addSubInterface(self.about_panel, FIF.INFO, tr('about'))
 
     def on_language_changed(self, index):
         lang_code = 'en' if index == 0 else 'zh'
