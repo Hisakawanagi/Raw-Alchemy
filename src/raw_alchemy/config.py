@@ -9,7 +9,7 @@ Raw Alchemy 配置文件
 
 # 缩略图/扫描等功能支持的 RAW 扩展名（小写，包含点号）
 SUPPORTED_RAW_EXTENSIONS = {
-'.dng', '.cr2', '.cr3', '.nef', '.arw', '.rw2', '.raf', '.orf', '.pef', '.srw', '.x3f', 'fff', '3fr'
+'.dng', '.cr2', '.cr3', '.nef', '.arw', '.rw2', '.raf', '.orf', '.pef', '.srw', '.x3f', '.fff', '.3fr'
 }
 
 # ==========================================

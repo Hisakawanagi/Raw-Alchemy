@@ -736,7 +736,10 @@ class MainWindow(FluentWindow):
     def batch_export_next(self):
         if self.batch_export_idx >= len(self.batch_export_list):
             if hasattr(self, 'batch_saving_infobar') and self.batch_saving_infobar:
-                self.batch_saving_infobar.close()
+                try:
+                    self.batch_saving_infobar.close()
+                except RuntimeError:
+                    pass
                 self.batch_saving_infobar = None
             InfoBar.success(tr('batch_export'), tr('all_exported'), parent=self)
             self.export_progress.hide()
@@ -801,7 +804,10 @@ class MainWindow(FluentWindow):
         def on_finish(success, msg):
             if is_single_export:
                 if hasattr(self, 'saving_infobar') and self.saving_infobar:
-                    self.saving_infobar.close()
+                    try:
+                        self.saving_infobar.close()
+                    except RuntimeError:
+                        pass
                     self.saving_infobar = None
                 self.btn_export_curr.setEnabled(True)
             
