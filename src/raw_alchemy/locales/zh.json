@@ -138,5 +138,14 @@
     "rotate_right": "向右旋转",
     "fine_tune": "微调",
     "flip_horizontal": "水平翻转",
-    "flip_vertical": "垂直翻转"
+    "flip_vertical": "垂直翻转",
+    "enter_crop_rotate": "裁剪与旋转",
+    "free": "自由",
+    "original": "原图比例",
+    "custom": "自定义",
+    "cancel": "取消",
+    "done": "完成",
+    "reset": "重置",
+    "loading_crop_view": "正在加载裁剪视图...",
+    "aspect_ratio": "纵横比"
 }

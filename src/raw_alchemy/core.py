@@ -38,6 +38,7 @@ def process_image(
     rotation: int = 0,
     flip_horizontal: bool = False,
     flip_vertical: bool = False,
+    crop: Optional[tuple] = None,
 ):
     filename = os.path.basename(raw_path)
     
@@ -100,6 +101,11 @@ def process_image(
     if rotation != 0 or flip_horizontal or flip_vertical:
         logger.info(f"  🔹 [Step 3.1.5] Geometry (Rot:{rotation}, FlipH:{flip_horizontal}, FlipV:{flip_vertical})...")
         img = utils.apply_geometry(img, rotation, flip_horizontal, flip_vertical)
+    
+    # 3.1.6 裁切
+    if crop and crop != (0.0, 0.0, 1.0, 1.0):
+        logger.info(f"  🔹 [Step 3.1.6] Cropping {crop}...")
+        img = utils.apply_crop(img, crop)
     
     # 3.2 白平衡
     if wb_temp != 0.0 or wb_tint != 0.0:

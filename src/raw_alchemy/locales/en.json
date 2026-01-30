@@ -138,5 +138,14 @@
     "rotate_right": "Rotate Right",
     "fine_tune": "Fine Tune",
     "flip_horizontal": "Flip Horizontal",
-    "flip_vertical": "Flip Vertical"
+    "flip_vertical": "Flip Vertical",
+    "enter_crop_rotate": "Crop && Rotate",
+    "free": "Free",
+    "original": "Original",
+    "custom": "Custom",
+    "cancel": "Cancel",
+    "done": "Done",
+    "reset": "Reset",
+    "loading_crop_view": "Loading crop view...",
+    "aspect_ratio": "Aspect Ratio"
 }

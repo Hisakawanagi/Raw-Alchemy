@@ -27,6 +27,7 @@ def process_path(
     rotation: int = 0,
     flip_horizontal: bool = False,
     flip_vertical: bool = False,
+    crop: tuple = (0.0, 0.0, 1.0, 1.0),
 ):
     """
     Orchestrates the processing of a single file or a directory of files.
@@ -147,6 +148,7 @@ def process_path(
                 rotation=rotation,
                 flip_horizontal=flip_horizontal,
                 flip_vertical=flip_vertical,
+                crop=crop,
             )
         finally:
             # 发送完成信号

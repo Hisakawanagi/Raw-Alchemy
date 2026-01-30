@@ -33,6 +33,8 @@ from raw_alchemy.ui.widgets.waveform import WaveformWidget
 from raw_alchemy.ui.widgets.gallery_item import GalleryItem
 from raw_alchemy.ui.widgets.inspector_panel import InspectorPanel
 from raw_alchemy.ui.widgets.title_bar import CenteredFluentTitleBar
+from raw_alchemy.ui.widgets.crop_rotate_viewer import CropRotateViewer
+from PySide6.QtWidgets import QStackedWidget
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -95,6 +97,8 @@ class MainWindow(FluentWindow):
         
         # Restore UI state from saved settings
         self.restore_ui()
+        
+        self.processor_connection_mode = 'normal' # 'normal' or 'crop'
 
     def systemTitleBarRect(self, size: QSize):
         """macOS: 预留系统红黄绿按钮区域（避免被自绘标题栏覆盖）"""
@@ -270,10 +274,17 @@ class MainWindow(FluentWindow):
         self.left_layout.addWidget(self.loading_label)
         self.left_layout.addWidget(self.open_btn)
         
-        # 2. Center Panel (Preview)
+        # 2. Center Panel (Preview Stack)
         self.center_panel = QWidget()
         self.center_layout = QVBoxLayout(self.center_panel)
-        self.center_layout.setContentsMargins(10, 10, 10, 10)
+        self.center_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.center_stack = QStackedWidget()
+        
+        # --- Page 1: Standard Preview ---
+        self.page_preview = QWidget()
+        self.preview_layout = QVBoxLayout(self.page_preview)
+        self.preview_layout.setContentsMargins(10, 10, 10, 10)
         
         self.preview_lbl = QLabel(tr('no_image_selected'))
         self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -323,13 +334,24 @@ class MainWindow(FluentWindow):
         self.toolbar_layout.addWidget(self.btn_export_curr)
         self.toolbar_layout.addWidget(self.btn_export_all)
         
-        self.center_layout.addWidget(self.preview_lbl)
-        self.center_layout.addWidget(self.toolbar)
-
+        self.preview_layout.addWidget(self.preview_lbl)
+        self.preview_layout.addWidget(self.toolbar)
+        
+        # --- Page 2: Crop Viewer ---
+        self.crop_viewer = CropRotateViewer()
+        self.crop_viewer.applied.connect(self.on_crop_applied)
+        self.crop_viewer.cancelled.connect(self.exit_crop_mode)
+        
+        self.center_stack.addWidget(self.page_preview)
+        self.center_stack.addWidget(self.crop_viewer)
+        
+        self.center_layout.addWidget(self.center_stack)
+        
         # 3. Right Panel (Inspector)
         self.right_panel = InspectorPanel()
-        self.right_panel.setFixedWidth(400)
+        self.right_panel.setFixedWidth(360) 
         self.right_panel.param_changed.connect(self.on_param_changed)
+        self.right_panel.enter_crop_mode.connect(self.enter_crop_mode)
         self.right_panel.save_baseline_btn.clicked.connect(self.save_baseline_image)
 
         self.h_layout.addWidget(self.left_panel)
@@ -420,6 +442,174 @@ class MainWindow(FluentWindow):
         self.thumb_worker.finished_scanning.connect(self.on_thumbnail_finished)
         self.thumb_worker.start()
     
+    def update_status(self, text):
+        self.loading_label.setText(text)
+        if text:
+            self.loading_label.show()
+        else:
+            self.loading_label.hide()
+            
+    # --- Crop Mode Handling ---
+    
+    def enter_crop_mode(self):
+        """Switch to Crop/Rotate view"""
+        if not self.current_raw_path: return
+        
+        # [Fix Issue 2] If already in crop mode, this button acts as "Done"
+        if self.center_stack.currentWidget() == self.crop_viewer:
+            self.crop_viewer._on_done()
+            return
+            
+        logger.info("Entering Crop Mode...")
+         
+        # 1. Disable standard processing updates temporarily
+        self.update_timer.stop()
+        
+        # 2. Get current params
+        params = self.file_params_cache.get(self.current_raw_path, {}).copy()
+        
+        # 3. We need the "Base" image (Linear + Lens Corrected ONLY).
+        # The crop viewer needs to see the UN-ROTATED, UN-CROPPED image to allow user to edit it.
+        # However, for performance, we should ask the processor for the cached linear/corrected data.
+        # But Processor communicates via signals.
+        # Strategy: Send a special request or leverage the fact that we process in layers?
+        # Actually, we can just grab the current 'linear' or 'corrected' from processor if we had access, 
+        # but thread safety.
+        # `self.original` in MainWindow is RAW decoded? No, `ImageState` just holds generic objects.
+        # `self.original` is populated in `on_load_complete`? No, it's not currently used much.
+        
+        # Let's request a special "preview_for_crop" from processor?
+        # Or just use the original raw loading logic?
+        # 
+        # Hack/Fast path: Access processor.cached_corrected directly? (Not thread safe technically but Python GIL helps)
+        # Proper way: request_id.
+        
+        # Let's implement a "request_base_image" signal/slot.
+        # For now, let's just trigger a process with "Geometry=Defaults" and "Color=Defaults"?
+        # But that applies display transform etc.
+        # The CropViewer expects a PIXMAP.
+        
+        # Let's add a sync method or callback to get the current base image from processor.
+        # Or... since we are in Python, let's cheat slightly and read the cache if the worker is idle?
+        # No, let's do it properly:
+        # We emit a signal to processor "get_crop_source(path)". Processor replies with signals.
+        
+        # Simpler: The `CropRotateViewer` takes the current display image? No, that's already cropped.
+        # 
+        # NEW PLAN: 
+        # When entering crop mode, we take the *current* params, 
+        # set rotation=0, flip=False, crop=None,
+        # request a preview update with a special flag `_for_crop=True`?
+        # The processor generates the image (which will hit the Corrected Cache) and emits result.
+        # We intercept this result.
+        
+        # To distinguish this result from normal preview: use `request_id`.
+        # Track ID for crop mode
+        # self.crop_request_id = self.processor.current_request_id + 100000 
+        # Actually we can't force ID.
+        # We can just track the ID returned by update_preview? 
+        # But update_preview returns nothing, just queues.
+        
+        # Let's assume we request an update with specific params. Parameters are the key.
+        base_params = params.copy()
+        base_params['rotation'] = 0
+        base_params['flip_horizontal'] = False
+        base_params['flip_vertical'] = False
+        base_params['crop'] = (0.0, 0.0, 1.0, 1.0)
+        # Keep Lens Correction!
+        # Disable others for speed? Or user wants to see exposure while cropping?
+        # Usually we want to see exposure. So keep exposure/color.
+        # Just reset Geometry.
+        
+        self.processor_connection_mode = 'crop' # State flag
+        self.crop_request_id = self.processor.update_preview(self.current_raw_path, base_params)
+        
+        self.update_status(tr('loading_crop_view'))
+        
+    def on_crop_ready(self, img_uint8, params_context):
+        """Called when processor finishes the image for Crop Viewer"""
+        # Convert to QPixmap
+        h, w, c = img_uint8.shape
+        img = QImage(img_uint8.data, w, h, c * w, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(img)
+        
+        # Original Params (to retrieve current rotation/crop state)
+        current_params = self.file_params_cache.get(self.current_raw_path, {})
+        
+        # Initialize Viewer
+        self.crop_viewer.set_image(pixmap, current_params)
+        
+        # Switch View
+        self.center_stack.setCurrentWidget(self.crop_viewer)
+        self.loading_label.hide()
+
+    def on_crop_applied(self, rotation, flip_h, flip_v, crop_rect):
+        """User clicked Done"""
+        # Update Params
+        # We update the Inspector Panel, which updates its internal model and UI.
+        # Accessing private method or expose public setter? 
+        # `update_crop_params` was added to InspectorPanel.
+        self.right_panel.update_crop_params(rotation, flip_h, flip_v, crop_rect)
+        
+        self.exit_crop_mode()
+        
+    def exit_crop_mode(self):
+        """Return to normal view"""
+        logger.info("Exiting crop mode...")
+        
+        # [Fix Issue 1] Generate temporary preview to prevent "jump" back to old state
+        # effectively masking the lag while the processor works in background
+        try:
+            if self.crop_viewer.display_pixmap:
+                # 1. Get the full rotated image
+                full_pix = self.crop_viewer.display_pixmap
+                w = full_pix.width()
+                h = full_pix.height()
+                
+                # 2. Calculate crop rect in pixels
+                cx, cy, cw, ch = self.crop_viewer.crop_rect
+                px = int(cx * w)
+                py = int(cy * h)
+                pw = int(cw * w)
+                ph = int(ch * h)
+                
+                # 3. Sanity check
+                if pw > 0 and ph > 0:
+                    # 4. Crop
+                    temp_preview = full_pix.copy(px, py, pw, ph)
+                    
+                    # 5. Scale to preview label size for display
+                    # Use SmoothTransformation and KeepAspectRatio to match normal behavior
+                    # This prevents the window from resizing if the crop is larger than the viewport
+                    scaled_preview = temp_preview.scaled(
+                        self.preview_lbl.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    
+                    self.preview_lbl.setPixmap(scaled_preview)
+                    # self.preview_lbl.setText("") # Clear text if any
+        except Exception as e:
+            logger.warning(f"Failed to generate temp preview: {e}")
+
+        self.processor_connection_mode = 'normal'
+        self.center_stack.setCurrentWidget(self.page_preview)
+        
+        # Re-enable standard processing updates
+        self.update_timer.stop() # Stop any pending
+        
+        # Trigger re-process with current params from the panel
+        # This ensuring we use the latest state (including crop if applied, or old if cancelled)
+        if self.current_raw_path:
+            # Update cache immediately with new crop params
+            self.file_params_cache[self.current_raw_path] = self.right_panel.get_params()
+            # Trigger processing (handles request_id increment and viewport optimization)
+            self.trigger_processing()
+        
+    # Modify on_process_result to handle specific crop flow?
+    # We need to intercept the result.
+    
+    # ... In next edit, I will patch `on_process_result` ...
     def on_thumbnail_progress(self, current, total):
         self.loading_label.setText(f"{tr('loading_thumbnails')}: {current}/{total}")
     
@@ -464,6 +654,19 @@ class MainWindow(FluentWindow):
         
         if path in self.file_params_cache:
             self.right_panel.set_params(self.file_params_cache[path])
+        else:
+            # [Fix Issue 11] New image: Reset geometry (crop/rotate) but keep other sticky settings
+            # We get the current params from the panel (which still holds the previous image's state or defaults)
+            current_sticky_params = self.right_panel.get_params()
+            
+            # Reset geometry defaults
+            current_sticky_params['rotation'] = 0
+            current_sticky_params['flip_horizontal'] = False
+            current_sticky_params['flip_vertical'] = False
+            current_sticky_params['crop'] = (0.0, 0.0, 1.0, 1.0)
+            
+            # Apply back to panel so the UI reflects the reset and next get_params() is correct
+            self.right_panel.set_params(current_sticky_params)
         
         self.update_mark_button_state()
         self.load_image(path)
@@ -473,8 +676,7 @@ class MainWindow(FluentWindow):
 
     def load_image(self, path):
         self.preview_lbl.setText(tr('loading'))
-        self.current_request_id = self.processor.current_request_id + 1
-        self.processor.load_image(path)
+        self.current_request_id = self.processor.load_image(path)
         
     def on_param_changed(self, params):
         self.update_timer.start()
@@ -485,8 +687,8 @@ class MainWindow(FluentWindow):
         # Pass viewport size for view-based LUT optimization
         size = self.preview_lbl.size()
         params['viewport_size'] = (size.width(), size.height())
-        self.current_request_id += 1
-        self.processor.update_preview(self.current_raw_path, params)
+        params['viewport_size'] = (size.width(), size.height())
+        self.current_request_id = self.processor.update_preview(self.current_raw_path, params)
     
     def save_baseline_image(self):
         if not self.current_raw_path: return
@@ -503,10 +705,11 @@ class MainWindow(FluentWindow):
         
         InfoBar.success(tr('baseline_saved'), tr('baseline_saved_message'), parent=self)
     
+        
     def on_baseline_result(self, img_uint8, img_float, image_path, request_id):
         if image_path != self.current_raw_path: return
         h, w, c = img_uint8.shape
-        qimg = QImage(img_uint8.data, w, h, w*3, QImage.Format.Format_RGB888)
+        qimg = QImage(img_uint8.data, w, h, c * w, QImage.Format.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg.copy())
         self.baseline.update_full(pixmap, img_float)
     
@@ -523,20 +726,43 @@ class MainWindow(FluentWindow):
         self.baseline_processor.update_preview(self.current_raw_path, baseline_params)
 
     def on_process_result(self, img_uint8, img_float, image_path, request_id, applied_ev):
+        """Handle processing result"""
+        if image_path != self.current_raw_path:
+            return
+
+        # Check connection mode
+        if hasattr(self, 'processor_connection_mode') and self.processor_connection_mode == 'crop':
+            # Route to Crop Viewer
+            if request_id == self.crop_request_id:
+                self.on_crop_ready(img_uint8, None)
+            return
+
         h, w, c = img_uint8.shape
-        qimg = QImage(img_uint8.data, w, h, w*3, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg.copy())
+        img = QImage(img_uint8.data, w, h, c * w, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(img)
         
+        # Update Thumbnail
         for i in range(self.gallery_list.count()):
             item = self.gallery_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == image_path:
-                thumb_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
-                item.setIcon(QIcon(thumb_pixmap))
+                # Align with ThumbnailWorker: scale to height 300, preserve aspect ratio, no padding.
+                # This prevents the thumbnail from shrinking/changing layout when updated.
+                scaled = pixmap.scaledToHeight(300, Qt.TransformationMode.SmoothTransformation)
+                item.setIcon(QIcon(scaled))
+                
+                # Force repaint of the item area to prevent ghosting artifacts
+                # when aspect ratio changes (e.g. rotation) on a transparent background
+                rect = self.gallery_list.visualItemRect(item)
+                self.gallery_list.viewport().update(rect)
                 break
         
         if request_id != self.current_request_id or image_path != self.current_raw_path: return
         
         self.current.update_full(pixmap, img_float.copy())
+        # Update params cache to current state
+        if self.current_raw_path:
+             self.file_params_cache[self.current_raw_path] = self.right_panel.get_params()
+        
         if self.original.full is None:
             self.original.update_full(pixmap.copy(), img_float.copy())
         
@@ -572,8 +798,8 @@ class MainWindow(FluentWindow):
         # Pass viewport size for view-based LUT optimization
         size = self.preview_lbl.size()
         params['viewport_size'] = (size.width(), size.height())
-        self.current_request_id += 1
-        self.processor.update_preview(path, params)
+        params['viewport_size'] = (size.width(), size.height())
+        self.current_request_id = self.processor.update_preview(path, params)
 
     def on_error(self, msg):
         self.preview_lbl.setText(f"{tr('error')}: {msg}")
@@ -793,7 +1019,8 @@ class MainWindow(FluentWindow):
                         # Geometry
                         rotation=p.get('rotation', 0),
                         flip_horizontal=p.get('flip_horizontal', False),
-                        flip_vertical=p.get('flip_vertical', False)
+                        flip_vertical=p.get('flip_vertical', False),
+                        crop=p.get('crop', (0.0, 0.0, 1.0, 1.0))
                     )
                     self.finished_sig.emit(True, "")
                 except Exception as e:

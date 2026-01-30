@@ -41,6 +41,9 @@ class ImageProcessor(QThread):
         self.cached_geometry = None     # Layer 0.5: After Geometry
         self.last_geometry_key = None
 
+        self.cached_cropped = None      # Layer 0.6: After Crop
+        self.last_crop_key = None
+
         self.cached_exposed = None      # Layer 1: After Exposure Gain
         self.last_exposure_key = None
         
@@ -66,10 +69,12 @@ class ImageProcessor(QThread):
         """Load RAW image - creates a special load request"""
         with self.lock:
             self.current_request_id += 1
-            self.pending_request = ProcessRequest(path, {'_load': True}, self.current_request_id)
+            request_id = self.current_request_id
+            self.pending_request = ProcessRequest(path, {'_load': True}, request_id)
         
         if not self.isRunning():
             self.start()
+        return request_id
 
     def preload_image(self, path: str):
         """Preload image into cache silently (low priority if possible, but queue based here)"""
@@ -83,12 +88,15 @@ class ImageProcessor(QThread):
 
     def update_preview(self, path: str, params: dict):
         """Process image with parameters"""
+        logger.info(f"[Processor] update_preview called for {os.path.basename(path)}. Rotation={params.get('rotation')}")
         with self.lock:
             self.current_request_id += 1
-            self.pending_request = ProcessRequest(path, params, self.current_request_id)
+            request_id = self.current_request_id
+            self.pending_request = ProcessRequest(path, params, request_id)
         
         if not self.isRunning():
             self.start()
+        return request_id
 
     def run(self):
         """Keep thread alive to process requests without restart overhead"""
@@ -190,8 +198,11 @@ class ImageProcessor(QThread):
             self.cached_corrected = cached_item.corrected_data
             
             # Reset pipeline caches for new image context
+            # Reset pipeline caches for new image context
             self.cached_geometry = None
             self.last_geometry_key = None
+            self.cached_cropped = None
+            self.last_crop_key = None
             self.cached_exposed = None
             self.last_exposure_key = None
             self.cached_adjusted = None
@@ -214,6 +225,8 @@ class ImageProcessor(QThread):
             
             self.cached_geometry = None
             self.last_geometry_key = None
+            self.cached_cropped = None
+            self.last_crop_key = None
             self.cached_exposed = None
             self.last_exposure_key = None
             self.cached_adjusted = None
@@ -312,6 +325,8 @@ class ImageProcessor(QThread):
                 # Invalidate dev cache since base changed
                 self.cached_geometry = None # Invalidate downstream
                 self.last_geometry_key = None
+                self.cached_cropped = None
+                self.last_crop_key = None
                 self.cached_exposed = None
                 self.last_exposure_key = None
                 self.cached_adjusted = None
@@ -366,10 +381,33 @@ class ImageProcessor(QThread):
                 )
                 self.last_geometry_key = geometry_key
                 # Invalidate next layers
+                self.cached_cropped = None
+                self.last_crop_key = None
                 self.cached_exposed = None
                 self.last_exposure_key = None
                 self.cached_adjusted = None
                 self.last_adjustment_key = None
+
+            # --- Stage 2.6: Crop (Layer 0.6) ---
+            crop_key = (
+                self.last_geometry_key,
+                params.get('crop', (0.0, 0.0, 1.0, 1.0))
+            )
+            
+            if crop_key == self.last_crop_key and self.cached_cropped is not None:
+                # Cache hit
+                pass
+            else:
+                logger.debug(f"[Worker] Layer 2.6 (Crop) Computing... {params.get('crop')}")
+                self.cached_cropped = utils.apply_crop(
+                    self.cached_geometry,
+                    params.get('crop', (0.0, 0.0, 1.0, 1.0))
+                )
+                self.last_crop_key = crop_key
+                self.cached_exposed = None
+                self.last_exposure_key = None
+                self.cached_adjusted = None
+                self.last_adjustment_key = None 
 
             # --- Stage 3: Exposure (Layer 1) ---
             # Define metering key to avoid re-calculating auto exposure when only sliders allow
@@ -377,10 +415,13 @@ class ImageProcessor(QThread):
             # 1. Lens correction changed (implied by execution flow reaching here)
             # 2. Metering mode changed
             # 3. Image changed
-            # 4. Geometry changed
+            # 3. Image changed
+            # 4. Geometry changed (REMOVED - Metering should be stable on rotation)
+            # 5. Crop changed (REMOVED - Metering should be on full frame)
             current_metering_key = (
                 self.cached_lens_key,
-                self.last_geometry_key,
+                # self.last_geometry_key, # Decouple from geometry
+                # self.last_crop_key,     # Decouple from crop
                 params.get('metering_mode', 'matrix')
             )
             
@@ -403,9 +444,9 @@ class ImageProcessor(QThread):
                     logger.debug(f"[Worker] Calculating Auto Exposure (Cache Miss)...")
                     source_cs = colour.RGB_COLOURSPACES['ProPhoto RGB']
                     mode = params.get('metering_mode', 'matrix')
-                    # Use geometry-corrected image for metering
+                    # Use corrected (but un-cropped/un-rotated) image for metering to ensure stability
                     strategy = metering.get_metering_strategy(mode)
-                    gain = strategy.calculate_gain(self.cached_geometry, source_cs)
+                    gain = strategy.calculate_gain(self.cached_corrected, source_cs)
                     
                     self.cached_auto_ev = np.log2(gain)
                     self.last_metering_key = current_metering_key
@@ -417,6 +458,7 @@ class ImageProcessor(QThread):
             exposure_key = (
                 self.cached_lens_key,
                 self.last_geometry_key,
+                self.last_crop_key,
                 final_exposure_gain
             )
             
@@ -425,7 +467,7 @@ class ImageProcessor(QThread):
                 img_exposed = self.cached_exposed # No copy needed yet, read-only
             else:
                 logger.debug(f"[Worker] Layer 1 (Exposure) Computing...")
-                img_exposed = self.cached_geometry.copy()
+                img_exposed = self.cached_cropped.copy()
                 utils.apply_gain_inplace(img_exposed, final_exposure_gain)
                 
                 self.cached_exposed = img_exposed

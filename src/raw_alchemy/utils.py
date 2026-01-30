@@ -498,3 +498,75 @@ def apply_geometry(img: np.ndarray, rotation: int = 0, flip_h: bool = False, fli
         
     return out
 
+
+def apply_crop(img: np.ndarray, crop_rect: Tuple[float, float, float, float]) -> np.ndarray:
+    """
+    Apply crop to image using normalized coordinates.
+    crop_rect: (x, y, w, h) where all values are 0.0-1.0
+    """
+    if not crop_rect or crop_rect == (0.0, 0.0, 1.0, 1.0):
+        return img
+        
+    h, w = img.shape[:2]
+    x_norm, y_norm, w_norm, h_norm = crop_rect
+    
+    # Validation
+    if w_norm <= 0 or h_norm <= 0:
+        return img
+        
+    x = int(x_norm * w)
+    y = int(y_norm * h)
+    cw = int(w_norm * w)
+    ch = int(h_norm * h)
+    
+    # Boundary checks
+    x = max(0, min(x, w - 1))
+    y = max(0, min(y, h - 1))
+    cw = max(1, min(cw, w - x))
+    ch = max(1, min(ch, h - y))
+    
+    # Slice
+    # Force copy to allow previous large buffers to be GC'd if needed, 
+    # but here we might want a view for speed? 
+    # Actually for caching, a copy is safer to avoid keeping the huge rotated image alive if not needed.
+    return img[y:y+ch, x:x+cw, :].copy() 
+
+def get_rotated_bounds(w: int, h: int, angle: float) -> Tuple[int, int]:
+    """Calculate the bounding box size of a rotated rectangle"""
+    angle_rad = np.radians(angle)
+    sin_a = abs(np.sin(angle_rad))
+    cos_a = abs(np.cos(angle_rad))
+    
+    new_w = int(h * sin_a + w * cos_a)
+    new_h = int(h * cos_a + w * sin_a)
+    return new_w, new_h
+
+def get_max_rect_in_rotated(w: int, h: int, angle: float) -> Tuple[float, float, float, float]:
+    """
+    Calculate the maximum axis-aligned rectangle (in normalized coords) 
+    that fits inside the rotated image (which itself has black corners).
+    
+    This is complex geometry. Simplified approach:
+    For a given angle, we want to find the largest rect with aspect ratio w/h?
+    Or just *a* valid rect.
+    
+    Actually, usually we just want to know "how much do I need to zoom in" to avoid black borders.
+    """
+    # This is a placeholder for the math. 
+    # The UI will likely handle the interactive logic.
+    # But strictly for a "Default Safe Crop", we can compute it.
+    # Ref: https://stackoverflow.com/questions/16702966/rotate-image-and-crop-out-black-borders
+    
+    if angle % 180 == 0:
+        return (0.0, 0.0, 1.0, 1.0)
+        
+    w_rot, h_rot = get_rotated_bounds(w, h, angle)
+    
+    # We want to find x,y,w,h in the ROTATED image coordinate system (0..w_rot, 0..h_rot)
+    # that represents the maximum area inscribed rectangle.
+    # That is mathematically involved.
+    # For now, let's return a safe full rect (0,0,1,1) effectively saying "User deals with it"
+    # Or implement a simple heuristic if needed.
+    return (0.0, 0.0, 1.0, 1.0)
+
+
