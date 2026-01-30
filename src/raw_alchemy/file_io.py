@@ -15,7 +15,7 @@ def save_image(
     img: np.ndarray,
     output_path: str,
     logger: Optional[Logger] = None,
-    exif_img: Optional[pyexiv2.Image] = None,
+    exif_metadata: Optional[dict] = None,
     exif_dict: Optional[dict] = None,
     color_matrix = None
 ) -> bool:
@@ -26,8 +26,9 @@ def save_image(
         img: 图像数据 (float32, 0.0-1.0)
         output_path: 输出路径
         logger: 日志处理器
-        exif_img: pyexiv2 图像对象，用于复制完整 EXIF 数据（优先使用）
-        exif_dict: 从 rawpy 提取的 EXIF 数据字典，当 exif_img 不可用时使用
+        exif_metadata: 完整的元数据字典 {'exif', 'iptc', 'xmp'} (代替之前的 pyexiv2.Image 对象)
+        exif_dict: 从 rawpy 提取的 EXIF 数据字典，当 exif_metadata 写入失败或不可用时降级使用
+
     
     Returns:
         bool: 是否保存成功
@@ -58,9 +59,13 @@ def save_image(
         # 【修改逻辑】只有非 DNG 格式才使用 pyexiv2 写入 EXIF
         # 因为 pyexiv2 修改 DNG 会导致 "Multiple IFDs" 结构错误
         if not exif_handled_internally:
-            if exif_img:
-                _write_exif(output_path, exif_img, logger)
-            elif exif_dict:
+            exif_written = False
+            if exif_metadata:
+                exif_written = _write_exif(output_path, exif_metadata, logger)
+            
+            # 如果主要 EXIF 写入失败（例如 pyexiv2 兼容性问题），尝试降级写入
+            if not exif_written and exif_dict:
+                logger.info("  ⚠️  Falling back to basic EXIF writing from dictionary...")
                 _write_exif_from_dict(output_path, exif_dict, logger)
         else:
             _write_exif_from_dict(output_path, exif_dict, logger)
@@ -220,17 +225,31 @@ def _save_jpeg_or_other(img: np.ndarray, output_path: str, file_ext: str, logger
             'optimize': True
         }
     
+    # 保存时暂时不写入 EXIF，通过 _write_exif 将 EXIF 注入文件
     Image.fromarray(output_image_uint8).save(output_path, **save_params)
 
 
-def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
-    """将 EXIF 数据写入输出文件（排除旋转信息）"""
+def _write_exif(output_path: str, exif_metadata: dict, logger: Logger) -> bool:
+    """
+    将 EXIF 数据写入输出文件（排除旋转信息）
+    Args:
+        output_path: 输出文件路径
+        exif_metadata: 包含 'exif', 'iptc', 'xmp' 字典的元数据对象
+        logger: 日志器
+    Returns: True if successful, False otherwise
+    """
     try:
-        # 读取源文件的 EXIF 数据
-        exif_data = exif_img.read_exif()
-        iptc_data = exif_img.read_iptc()
-        xmp_data = exif_img.read_xmp()
+        if not exif_metadata:
+            return False
+
+        exif_data = exif_metadata.get('exif', {})
+        iptc_data = exif_metadata.get('iptc', {})
+        xmp_data = exif_metadata.get('xmp', {})
         
+        if not exif_data and not iptc_data and not xmp_data:
+            logger.info("    ℹ️  No EXIF data provided to write.")
+            return False
+
         # 打开输出文件并写入 EXIF 数据
         output_img = pyexiv2.Image(output_path)
         
@@ -238,7 +257,10 @@ def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
         if exif_data:
             # 移除旋转相关的 EXIF 标签
             rotation_tags = ['Exif.Image.Orientation']
-            for tag in rotation_tags:
+            # 移除可能引起写入问题的 Sony 特定标签或缩略图标签
+            problematic_tags = ['Exif.Thumbnail.JPEGInterchangeFormat', 'Exif.Thumbnail.JPEGInterchangeFormatLength']
+            
+            for tag in rotation_tags + problematic_tags:
                 if tag in exif_data:
                     del exif_data[tag]
             
@@ -254,9 +276,11 @@ def _write_exif(output_path: str, exif_img: pyexiv2.Image, logger: Logger):
         
         output_img.close()
         logger.info("    ✅ EXIF data written successfully (rotation info excluded)")
+        return True
         
     except Exception as e:
-        logger.warning(f"    ⚠️  Failed to write EXIF data: {e}")
+        logger.warning(f"    ⚠️  Failed to write full EXIF data: {e}")
+        return False
 
 
 def _write_exif_from_dict(output_path: str, exif_dict: dict, logger: Logger):
@@ -300,6 +324,29 @@ def _write_exif_from_dict(output_path: str, exif_dict: dict, logger: Logger):
             aperture = exif_dict['aperture']
             basic_exif['Exif.Photo.FNumber'] = f"{int(aperture * 10)}/10"
         
+        # ISO
+        if exif_dict.get('iso'):
+            basic_exif['Exif.Photo.ISOSpeedRatings'] = str(exif_dict['iso'])
+            
+        # 曝光时间 (如果是字符串 "1/100" 直接写入，如果是 float 则转换)
+        if exif_dict.get('exposure_time'):
+            et = exif_dict['exposure_time']
+            if isinstance(et, (float, int)):
+                # Convert float seconds to fractional string approx
+                if et >= 1:
+                     basic_exif['Exif.Photo.ExposureTime'] = f"{int(et)}/1"
+                else:
+                     # e.g. 0.01 -> 1/100
+                     denom = int(1.0 / et + 0.5)
+                     basic_exif['Exif.Photo.ExposureTime'] = f"1/{denom}"
+            else:
+                basic_exif['Exif.Photo.ExposureTime'] = str(et)
+
+        # 拍摄时间 "YYYY:MM:DD HH:MM:SS"
+        if exif_dict.get('datetime'):
+             basic_exif['Exif.Photo.DateTimeOriginal'] = str(exif_dict['datetime'])
+             basic_exif['Exif.Image.DateTime'] = str(exif_dict['datetime'])
+
         # 写入 EXIF 数据
         if basic_exif:
             output_img.modify_exif(basic_exif)

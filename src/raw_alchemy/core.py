@@ -51,7 +51,7 @@ def process_image(
     
     # 提取 EXIF (用于镜头校正和后续写入)
     with rawpy.imread(raw_path) as raw:
-        exif_data, exif_img = utils.extract_lens_exif(raw_path, raw)
+        exif_data, exif_metadata = utils.extract_lens_exif(raw_path, raw)
         # 解码: 必须使用 16-bit 以保留 Log 转换所需的动态范围
         prophoto_linear = raw.postprocess(
             gamma=(1, 1),
@@ -205,10 +205,8 @@ def process_image(
 
     # --- Step 6: 保存（使用模块化的文件保存功能）---
     logger.info(f"  💾 Saving to {os.path.basename(output_path)}...")
-    save_image(img, output_path, logger, exif_img=exif_img, exif_dict=exif_data, color_matrix=color_matrix)
+    save_image(img, output_path, logger, exif_metadata=exif_metadata, exif_dict=exif_data, color_matrix=color_matrix)
     
     # --- 最终清理 ---
     del img
-    if exif_img:
-        exif_img.close()
     gc.collect()
