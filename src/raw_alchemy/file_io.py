@@ -256,11 +256,9 @@ def _write_exif(output_path: str, exif_metadata: dict, logger: Logger) -> bool:
         # 写入 EXIF 数据，但排除旋转相关标签
         if exif_data:
             # 移除旋转相关的 EXIF 标签
-            rotation_tags = ['Exif.Image.Orientation']
-            # 移除可能引起写入问题的 Sony 特定标签或缩略图标签
-            problematic_tags = ['Exif.Thumbnail.JPEGInterchangeFormat', 'Exif.Thumbnail.JPEGInterchangeFormatLength']
-            
-            for tag in rotation_tags + problematic_tags:
+            problematic_tags = ['Exif.Image.Orientation', 'Exif.Thumbnail.JPEGInterchangeFormat', 'Exif.Thumbnail.JPEGInterchangeFormatLength']
+
+            for tag in problematic_tags:
                 if tag in exif_data:
                     del exif_data[tag]
             
