@@ -147,5 +147,8 @@
     "done": "Done",
     "reset": "Reset",
     "loading_crop_view": "Loading crop view...",
-    "aspect_ratio": "Aspect Ratio"
+    "aspect_ratio": "Aspect Ratio",
+    "perspective_correction": "Perspective Correction",
+    "perspective_hint": "Drag the four corners to correct perspective",
+    "loading_perspective_view": "Loading perspective view..."
 }

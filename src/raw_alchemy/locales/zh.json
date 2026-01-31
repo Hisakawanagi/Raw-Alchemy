@@ -147,5 +147,8 @@
     "done": "完成",
     "reset": "重置",
     "loading_crop_view": "正在加载裁剪视图...",
-    "aspect_ratio": "纵横比"
+    "aspect_ratio": "纵横比",
+    "perspective_correction": "透视矫正",
+    "perspective_hint": "拖动四个角点来矫正透视",
+    "loading_perspective_view": "正在加载透视矫正视图..."
 }
