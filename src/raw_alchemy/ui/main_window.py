@@ -34,6 +34,7 @@ from raw_alchemy.ui.widgets.gallery_item import GalleryItem
 from raw_alchemy.ui.widgets.inspector_panel import InspectorPanel
 from raw_alchemy.ui.widgets.title_bar import CenteredFluentTitleBar
 from raw_alchemy.ui.widgets.crop_rotate_viewer import CropRotateViewer
+from raw_alchemy.ui.widgets.help_panel import HelpPanel
 from PySide6.QtWidgets import QStackedWidget
 
 class MainWindow(FluentWindow):
@@ -382,6 +383,11 @@ class MainWindow(FluentWindow):
         settings_layout.addWidget(lang_card)
         settings_layout.addStretch()
         
+        # Help interface
+        self.help_widget = HelpPanel()
+        self.help_widget.setObjectName("helpInterface")
+        self.addSubInterface(self.help_widget, FIF.HELP, tr('help'))
+
         self.settings_widget.setObjectName("settingsInterface")
         self.addSubInterface(self.settings_widget, FIF.SETTING, tr('settings'))
 
