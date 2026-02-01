@@ -403,6 +403,133 @@ def compute_waveform_channel(channel_data, waveform_out, bins, sample_rate):
             
             waveform_out[i, bin_idx] += 1.0
 
+@njit(**JIT_CONFIG)
+def perspective_warp_kernel(src, dst, M_inv):
+    """
+    Perspective warp using inverse mapping + bilinear interpolation.
+    src: Source image HxWx3
+    dst: Destination image (pre-allocated, same size or different)
+    M_inv: 3x3 inverse perspective matrix
+    """
+    dst_h = dst.shape[0]
+    dst_w = dst.shape[1]
+    src_h = src.shape[0]
+    src_w = src.shape[1]
+    
+    # Extract matrix elements for speed
+    m00, m01, m02 = M_inv[0, 0], M_inv[0, 1], M_inv[0, 2]
+    m10, m11, m12 = M_inv[1, 0], M_inv[1, 1], M_inv[1, 2]
+    m20, m21, m22 = M_inv[2, 0], M_inv[2, 1], M_inv[2, 2]
+    
+    src_h_1 = src_h - 1.0
+    src_w_1 = src_w - 1.0
+    
+    for y in prange(dst_h):
+        for x in range(dst_w):
+            # Inverse perspective transform to find source coordinates
+            denom = m20 * x + m21 * y + m22
+            if denom == 0.0:
+                denom = 1e-10  # Avoid division by zero
+            
+            src_x = (m00 * x + m01 * y + m02) / denom
+            src_y = (m10 * x + m11 * y + m12) / denom
+            
+            # Bilinear interpolation
+            if src_x < 0.0 or src_x > src_w_1 or src_y < 0.0 or src_y > src_h_1:
+                # Out of bounds - use edge reflection
+                src_x = max(0.0, min(src_x, src_w_1))
+                src_y = max(0.0, min(src_y, src_h_1))
+            
+            x0 = int(src_x)
+            y0 = int(src_y)
+            x1 = min(x0 + 1, int(src_w_1))
+            y1 = min(y0 + 1, int(src_h_1))
+            
+            dx = src_x - x0
+            dy = src_y - y0
+            
+            w00 = (1.0 - dx) * (1.0 - dy)
+            w01 = dx * (1.0 - dy)
+            w10 = (1.0 - dx) * dy
+            w11 = dx * dy
+            
+            for ch in range(3):
+                val = (src[y0, x0, ch] * w00 +
+                       src[y0, x1, ch] * w01 +
+                       src[y1, x0, ch] * w10 +
+                       src[y1, x1, ch] * w11)
+                dst[y, x, ch] = val
+
+
+def compute_perspective_matrix(src_corners, dst_width, dst_height):
+    """
+    Compute 3x3 perspective transform matrix from 4 source corners to destination rectangle.
+    src_corners: 4 points in normalized coords [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
+                 Order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+    Returns: 3x3 transformation matrix M such that dst = M @ src
+    """
+    # Source points in pixel coordinates
+    src = np.array([
+        [src_corners[0][0] * dst_width, src_corners[0][1] * dst_height],  # TL
+        [src_corners[1][0] * dst_width, src_corners[1][1] * dst_height],  # TR
+        [src_corners[2][0] * dst_width, src_corners[2][1] * dst_height],  # BR
+        [src_corners[3][0] * dst_width, src_corners[3][1] * dst_height],  # BL
+    ], dtype=np.float64)
+    
+    # Destination is full image rectangle
+    dst = np.array([
+        [0.0, 0.0],                     # TL
+        [dst_width - 1, 0.0],           # TR
+        [dst_width - 1, dst_height - 1], # BR
+        [0.0, dst_height - 1],          # BL
+    ], dtype=np.float64)
+    
+    # Compute perspective transform using direct linear transform (DLT)
+    # Solve for H in: dst = H @ src (homogeneous coordinates)
+    # Build matrix A for Ah = 0
+    A = np.zeros((8, 8), dtype=np.float64)
+    b = np.zeros(8, dtype=np.float64)
+    
+    for i in range(4):
+        sx, sy = src[i, 0], src[i, 1]
+        dx, dy = dst[i, 0], dst[i, 1]
+        
+        A[i*2, 0] = sx
+        A[i*2, 1] = sy
+        A[i*2, 2] = 1.0
+        A[i*2, 6] = -dx * sx
+        A[i*2, 7] = -dx * sy
+        b[i*2] = dx
+        
+        A[i*2+1, 3] = sx
+        A[i*2+1, 4] = sy
+        A[i*2+1, 5] = 1.0
+        A[i*2+1, 6] = -dy * sx
+        A[i*2+1, 7] = -dy * sy
+        b[i*2+1] = dy
+    
+    # Solve linear system
+    try:
+        h = np.linalg.solve(A, b)
+    except np.linalg.LinAlgError:
+        # Singular matrix - return identity
+        return np.eye(3, dtype=np.float64), np.eye(3, dtype=np.float64)
+    
+    H = np.array([
+        [h[0], h[1], h[2]],
+        [h[3], h[4], h[5]],
+        [h[6], h[7], 1.0]
+    ], dtype=np.float64)
+    
+    # Inverse matrix for inverse mapping
+    try:
+        H_inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        H_inv = np.eye(3, dtype=np.float64)
+    
+    return H, H_inv
+
+
 def warmup():
     """Compiles all JIT functions with dummy data"""
     logger.info("  ♨️ Warming up JIT kernels...")
@@ -449,6 +576,12 @@ def warmup():
     wf_in = np.zeros((100, 100), dtype=np.float32)
     wf_out = np.zeros((25, 100), dtype=np.float32) # width=100, sample=4 -> 25
     compute_waveform_channel(wf_in, wf_out, 100, 4)
+    
+    # 10. Perspective Warp
+    persp_src = np.zeros((64, 64, 3), dtype=np.float32)
+    persp_dst = np.zeros((64, 64, 3), dtype=np.float32)
+    persp_matrix = np.eye(3, dtype=np.float64)
+    perspective_warp_kernel(persp_src, persp_dst, persp_matrix)
     
     logger.info("✅ JIT Warmup complete.")
 

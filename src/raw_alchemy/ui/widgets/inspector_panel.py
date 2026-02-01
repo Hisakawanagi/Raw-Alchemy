@@ -17,6 +17,7 @@ class InspectorPanel(ScrollArea):
     """Right side control panel"""
     param_changed = Signal(dict)
     enter_crop_mode = Signal()
+    enter_perspective_mode = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -69,7 +70,13 @@ class InspectorPanel(ScrollArea):
         self.btn_crop_mode.setIcon(FIF.CUT)
         self.btn_crop_mode.clicked.connect(self._on_enter_crop_mode)
         
+        # Perspective Correction Button
+        self.btn_perspective_mode = PushButton(tr('perspective_correction'))
+        self.btn_perspective_mode.setIcon(FIF.ZOOM)  # Using ZOOM as proxy for perspective
+        self.btn_perspective_mode.clicked.connect(self._on_enter_perspective_mode)
+        
         geo_layout.addWidget(self.btn_crop_mode)
+        geo_layout.addWidget(self.btn_perspective_mode)
         
         self.add_section(tr('geometry'), self.geo_card)
         
@@ -344,6 +351,9 @@ class InspectorPanel(ScrollArea):
              
         if 'crop' in params:
              self.crop_rect = params.get('crop', (0.0, 0.0, 1.0, 1.0))
+             
+        if 'perspective_corners' in params:
+             self.perspective_corners = params.get('perspective_corners')
             
         # Sliders
         for key, (slider, scale, _, name) in self.sliders.items():
@@ -487,6 +497,9 @@ class InspectorPanel(ScrollArea):
 
     def _on_enter_crop_mode(self):
         self.enter_crop_mode.emit()
+    
+    def _on_enter_perspective_mode(self):
+        self.enter_perspective_mode.emit()
 
     def update_crop_params(self, rotation, flip_h, flip_v, crop_rect):
         params = self.get_params()
@@ -546,7 +559,8 @@ class InspectorPanel(ScrollArea):
             
             'flip_horizontal': getattr(self, 'flip_h', False),
             'flip_vertical': getattr(self, 'flip_v', False),
-            'crop': getattr(self, 'crop_rect', (0.0, 0.0, 1.0, 1.0))
+            'crop': getattr(self, 'crop_rect', (0.0, 0.0, 1.0, 1.0)),
+            'perspective_corners': getattr(self, 'perspective_corners', None)
         }
         
         # Add sliders

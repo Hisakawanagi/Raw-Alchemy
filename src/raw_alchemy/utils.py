@@ -16,7 +16,9 @@ from raw_alchemy.math_ops import (
     linear_to_srgb_inplace,
     bt709_to_srgb_inplace,
     compute_histogram_channel,
-    compute_waveform_channel
+    compute_waveform_channel,
+    perspective_warp_kernel,
+    compute_perspective_matrix
 )
 from scipy import ndimage
 
@@ -497,6 +499,50 @@ def apply_geometry(img: np.ndarray, rotation: int = 0, flip_h: bool = False, fli
         out = np.ascontiguousarray(out)
         
     return out
+
+
+def apply_perspective(img: np.ndarray, corners: Tuple[Tuple[float, float], ...] = None) -> np.ndarray:
+    """
+    Apply perspective correction using 4 corner control points.
+    
+    Args:
+        img: Input image HxWx3 float32
+        corners: 4 points in normalized coords (0-1) as ((x1,y1), (x2,y2), (x3,y3), (x4,y4))
+                 Order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+                 Default (None) or corners at image corners = no transformation
+    
+    Returns:
+        Perspective-corrected image
+    """
+    # Default corners (no transformation)
+    default_corners = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    
+    if corners is None or corners == default_corners:
+        return img
+    
+    # Validate corners
+    if len(corners) != 4:
+        logger.warning(f"[Perspective] Invalid corners count: {len(corners)}, expected 4")
+        return img
+    
+    h, w = img.shape[:2]
+    
+    # Compute perspective matrix
+    _, M_inv = compute_perspective_matrix(corners, w, h)
+    
+    # Ensure input is contiguous float32
+    if not img.flags['C_CONTIGUOUS']:
+        img = np.ascontiguousarray(img)
+    if img.dtype != np.float32:
+        img = img.astype(np.float32)
+    
+    # Allocate output
+    dst = np.zeros_like(img)
+    
+    # Apply perspective warp (numba accelerated)
+    perspective_warp_kernel(img, dst, M_inv)
+    
+    return dst
 
 
 def apply_crop(img: np.ndarray, crop_rect: Tuple[float, float, float, float]) -> np.ndarray:

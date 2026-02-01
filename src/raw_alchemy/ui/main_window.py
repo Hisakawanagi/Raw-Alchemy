@@ -34,6 +34,7 @@ from raw_alchemy.ui.widgets.gallery_item import GalleryItem
 from raw_alchemy.ui.widgets.inspector_panel import InspectorPanel
 from raw_alchemy.ui.widgets.title_bar import CenteredFluentTitleBar
 from raw_alchemy.ui.widgets.crop_rotate_viewer import CropRotateViewer
+from raw_alchemy.ui.widgets.perspective_viewer import PerspectiveViewer
 from raw_alchemy.ui.widgets.help_panel import HelpPanel
 from PySide6.QtWidgets import QStackedWidget
 
@@ -99,7 +100,7 @@ class MainWindow(FluentWindow):
         # Restore UI state from saved settings
         self.restore_ui()
         
-        self.processor_connection_mode = 'normal' # 'normal' or 'crop'
+        self.processor_connection_mode = 'normal' # 'normal', 'crop', or 'perspective'
 
     def systemTitleBarRect(self, size: QSize):
         """macOS: 预留系统红黄绿按钮区域（避免被自绘标题栏覆盖）"""
@@ -343,8 +344,14 @@ class MainWindow(FluentWindow):
         self.crop_viewer.applied.connect(self.on_crop_applied)
         self.crop_viewer.cancelled.connect(self.exit_crop_mode)
         
+        # --- Page 3: Perspective Viewer ---
+        self.perspective_viewer = PerspectiveViewer()
+        self.perspective_viewer.applied.connect(self.on_perspective_applied)
+        self.perspective_viewer.cancelled.connect(self.exit_perspective_mode)
+        
         self.center_stack.addWidget(self.page_preview)
         self.center_stack.addWidget(self.crop_viewer)
+        self.center_stack.addWidget(self.perspective_viewer)
         
         self.center_layout.addWidget(self.center_stack)
         
@@ -353,6 +360,7 @@ class MainWindow(FluentWindow):
         self.right_panel.setFixedWidth(360) 
         self.right_panel.param_changed.connect(self.on_param_changed)
         self.right_panel.enter_crop_mode.connect(self.enter_crop_mode)
+        self.right_panel.enter_perspective_mode.connect(self.enter_perspective_mode)
         self.right_panel.save_baseline_btn.clicked.connect(self.save_baseline_image)
 
         self.h_layout.addWidget(self.left_panel)
@@ -612,6 +620,83 @@ class MainWindow(FluentWindow):
             # Trigger processing (handles request_id increment and viewport optimization)
             self.trigger_processing()
         
+    # --- Perspective Mode Handling ---
+    
+    def enter_perspective_mode(self):
+        """Switch to Perspective Correction view"""
+        if not self.current_raw_path: return
+        
+        # If already in perspective mode, this button acts as "Done"
+        if self.center_stack.currentWidget() == self.perspective_viewer:
+            self.perspective_viewer._on_done()
+            return
+            
+        logger.info("Entering Perspective Mode...")
+         
+        # 1. Disable standard processing updates temporarily
+        self.update_timer.stop()
+        
+        # 2. Get current params
+        params = self.file_params_cache.get(self.current_raw_path, {}).copy()
+        
+        # 3. Request base image (without geometry/perspective/crop applied)
+        base_params = params.copy()
+        base_params['rotation'] = 0
+        base_params['flip_horizontal'] = False
+        base_params['flip_vertical'] = False
+        base_params['perspective_corners'] = None  # Reset perspective
+        base_params['crop'] = (0.0, 0.0, 1.0, 1.0)
+        
+        self.processor_connection_mode = 'perspective'
+        self.perspective_request_id = self.processor.update_preview(self.current_raw_path, base_params)
+        
+        self.update_status(tr('loading_perspective_view'))
+        
+    def on_perspective_ready(self, img_uint8, params_context):
+        """Called when processor finishes the image for Perspective Viewer"""
+        # Convert to QPixmap
+        h, w, c = img_uint8.shape
+        from PySide6.QtGui import QImage, QPixmap
+        img = QImage(img_uint8.data, w, h, c * w, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(img)
+        
+        # Original Params (to retrieve current perspective state)
+        current_params = self.file_params_cache.get(self.current_raw_path, {})
+        
+        # Initialize Viewer
+        self.perspective_viewer.set_image(pixmap, current_params)
+        
+        # Switch View
+        self.center_stack.setCurrentWidget(self.perspective_viewer)
+        self.loading_label.hide()
+
+    def on_perspective_applied(self, corners):
+        """User clicked Done in perspective viewer"""
+        # Update Params in cache
+        if self.current_raw_path:
+            current_params = self.file_params_cache.get(self.current_raw_path, {})
+            current_params['perspective_corners'] = corners
+            self.file_params_cache[self.current_raw_path] = current_params
+            # Also update InspectorPanel internal state
+            self.right_panel.set_params(current_params)
+        
+        self.exit_perspective_mode()
+        
+    def exit_perspective_mode(self):
+        """Return to normal view from perspective mode"""
+        logger.info("Exiting perspective mode...")
+
+        self.processor_connection_mode = 'normal'
+        self.center_stack.setCurrentWidget(self.page_preview)
+        
+        # Re-enable standard processing updates
+        self.update_timer.stop()
+        
+        # Trigger re-process with current params
+        if self.current_raw_path:
+            self.file_params_cache[self.current_raw_path] = self.right_panel.get_params()
+            self.trigger_processing()
+        
     # Modify on_process_result to handle specific crop flow?
     # We need to intercept the result.
     
@@ -741,6 +826,12 @@ class MainWindow(FluentWindow):
             # Route to Crop Viewer
             if request_id == self.crop_request_id:
                 self.on_crop_ready(img_uint8, None)
+            return
+        
+        if hasattr(self, 'processor_connection_mode') and self.processor_connection_mode == 'perspective':
+            # Route to Perspective Viewer
+            if request_id == self.perspective_request_id:
+                self.on_perspective_ready(img_uint8, None)
             return
 
         h, w, c = img_uint8.shape

@@ -41,6 +41,9 @@ class ImageProcessor(QThread):
         self.cached_geometry = None     # Layer 0.5: After Geometry
         self.last_geometry_key = None
 
+        self.cached_perspective = None  # Layer 0.55: After Perspective Correction
+        self.last_perspective_key = None
+
         self.cached_cropped = None      # Layer 0.6: After Crop
         self.last_crop_key = None
 
@@ -201,6 +204,8 @@ class ImageProcessor(QThread):
             # Reset pipeline caches for new image context
             self.cached_geometry = None
             self.last_geometry_key = None
+            self.cached_perspective = None
+            self.last_perspective_key = None
             self.cached_cropped = None
             self.last_crop_key = None
             self.cached_exposed = None
@@ -225,6 +230,8 @@ class ImageProcessor(QThread):
             
             self.cached_geometry = None
             self.last_geometry_key = None
+            self.cached_perspective = None
+            self.last_perspective_key = None
             self.cached_cropped = None
             self.last_crop_key = None
             self.cached_exposed = None
@@ -381,6 +388,32 @@ class ImageProcessor(QThread):
                 )
                 self.last_geometry_key = geometry_key
                 # Invalidate next layers
+                self.cached_perspective = None
+                self.last_perspective_key = None
+                self.cached_cropped = None
+                self.last_crop_key = None
+                self.cached_exposed = None
+                self.last_exposure_key = None
+                self.cached_adjusted = None
+                self.last_adjustment_key = None
+
+            # --- Stage 2.55: Perspective Correction ---
+            perspective_key = (
+                self.last_geometry_key,
+                params.get('perspective_corners')  # 4-tuple of corner coords
+            )
+
+            if perspective_key == self.last_perspective_key and self.cached_perspective is not None:
+                # Cache hit
+                pass
+            else:
+                logger.debug(f"[Worker] Layer 2.55 (Perspective) Computing...")
+                self.cached_perspective = utils.apply_perspective(
+                    self.cached_geometry,
+                    params.get('perspective_corners')
+                )
+                self.last_perspective_key = perspective_key
+                # Invalidate downstream caches
                 self.cached_cropped = None
                 self.last_crop_key = None
                 self.cached_exposed = None
@@ -390,7 +423,7 @@ class ImageProcessor(QThread):
 
             # --- Stage 2.6: Crop (Layer 0.6) ---
             crop_key = (
-                self.last_geometry_key,
+                self.last_perspective_key,  # Now depends on perspective, not geometry
                 params.get('crop', (0.0, 0.0, 1.0, 1.0))
             )
             
@@ -400,7 +433,7 @@ class ImageProcessor(QThread):
             else:
                 logger.debug(f"[Worker] Layer 2.6 (Crop) Computing... {params.get('crop')}")
                 self.cached_cropped = utils.apply_crop(
-                    self.cached_geometry,
+                    self.cached_perspective,  # Use perspective-corrected image
                     params.get('crop', (0.0, 0.0, 1.0, 1.0))
                 )
                 self.last_crop_key = crop_key
