@@ -8,6 +8,12 @@ from qfluentwidgets import (
     SwitchButton, ComboBox, Slider, LineEdit, ToolButton, 
     PushButton, InfoBar, FluentIcon as FIF
 )
+
+
+class NoWheelSlider(Slider):
+    """Slider that ignores mouse wheel events to prevent accidental changes"""
+    def wheelEvent(self, event):
+        event.ignore()  # Let the parent ScrollArea handle the wheel event
 from raw_alchemy import config, lensfun_wrapper
 from raw_alchemy.i18n import tr
 from raw_alchemy.ui.widgets.histogram import HistogramWidget
@@ -110,7 +116,7 @@ class InspectorPanel(ScrollArea):
         self.metering_combo.setCurrentText(tr('matrix'))
         self.metering_combo.currentTextChanged.connect(self._on_param_change)
         
-        self.exp_slider = Slider(Qt.Orientation.Horizontal)
+        self.exp_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.exp_slider.setRange(-100, 100) # -10.0 to 10.0
         self.exp_slider.setValue(0)
         self.exp_slider.update()
@@ -213,11 +219,26 @@ class InspectorPanel(ScrollArea):
         
         self.sliders = {}
         self.slider_labels = {}  # 存储标签引用以便更新
+        self.slider_revert_btns = {}  # 存储撤回按钮引用
         
         def add_slider(key, name, min_v, max_v, default_v, scale=1.0):
             layout = QVBoxLayout()
+            
+            # 标签和撤回按钮布局
+            header_layout = QHBoxLayout()
             lbl = BodyLabel(f"{name}: {default_v}")
-            slider = Slider(Qt.Orientation.Horizontal)
+            
+            # 撤回按钮
+            revert_btn = ToolButton(FIF.HISTORY)
+            revert_btn.setFixedSize(24, 24)
+            revert_btn.setToolTip(tr('revert_to_baseline_or_default'))
+            revert_btn.clicked.connect(lambda checked, k=key: self._revert_slider(k))
+            
+            header_layout.addWidget(lbl)
+            header_layout.addStretch()
+            header_layout.addWidget(revert_btn)
+            
+            slider = NoWheelSlider(Qt.Orientation.Horizontal)
             # slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             slider.setRange(int(min_v*scale), int(max_v*scale))
             slider.setValue(int(default_v*scale))
@@ -231,11 +252,12 @@ class InspectorPanel(ScrollArea):
             
             slider.valueChanged.connect(update_lbl)
                 
-            layout.addWidget(lbl)
+            layout.addLayout(header_layout)
             layout.addWidget(slider)
             adj_layout.addLayout(layout)
             self.sliders[key] = (slider, scale, default_v, name)  # 添加 name 到元组
             self.slider_labels[key] = lbl  # 存储标签引用
+            self.slider_revert_btns[key] = revert_btn  # 存储撤回按钮引用
 
         add_slider('wb_temp', tr('temp'), -100, 100, 0, 1)
         add_slider('wb_tint', tr('tint'), -100, 100, 0, 1)
@@ -531,6 +553,29 @@ class InspectorPanel(ScrollArea):
 
     def _on_param_change(self):
         self.param_changed.emit(self.get_params())
+    
+    def _revert_slider(self, key):
+        """撤回单个滑条到基准值（如果有）或默认值"""
+        if key not in self.sliders:
+            return
+        
+        slider, scale, default_v, name = self.sliders[key]
+        
+        # 检查基准参数中是否有该值
+        if self.saved_baseline_params and key in self.saved_baseline_params:
+            target_value = self.saved_baseline_params[key]
+        else:
+            target_value = default_v
+        
+        # 设置滑条值
+        slider.setValue(int(target_value * scale))
+        
+        # 更新标签
+        if key in self.slider_labels:
+            self.slider_labels[key].setText(f"{name}: {target_value:.2f}")
+        
+        # 触发参数变更
+        self._on_param_change()
         
     def get_params(self):
         """Get parameters from UI to send to processor"""
@@ -597,13 +642,10 @@ class InspectorPanel(ScrollArea):
         # Geometry defaults
         self.base_rotation = 0
         self.fine_rotation = 0
-        self.rot_slider.setValue(0)
-        self.rot_value_label.setText("0°")
         self.flip_h = False
         self.flip_v = False
         self.crop_rect = (0.0, 0.0, 1.0, 1.0)
-        # self.flip_h_switch.setChecked(False)
-        # self.flip_v_switch.setChecked(False)
+        self.perspective_corners = None
         
         # Reset sliders
         for key, (slider, scale, default, name) in self.sliders.items():

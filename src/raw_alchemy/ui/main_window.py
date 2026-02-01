@@ -36,6 +36,8 @@ from raw_alchemy.ui.widgets.title_bar import CenteredFluentTitleBar
 from raw_alchemy.ui.widgets.crop_rotate_viewer import CropRotateViewer
 from raw_alchemy.ui.widgets.perspective_viewer import PerspectiveViewer
 from raw_alchemy.ui.widgets.help_panel import HelpPanel
+from raw_alchemy.ui.widgets.about_panel import AboutPanel
+from raw_alchemy.ui.widgets.settings_panel import SettingsPanel
 from PySide6.QtWidgets import QStackedWidget
 
 class MainWindow(FluentWindow):
@@ -76,7 +78,9 @@ class MainWindow(FluentWindow):
         
         self.create_ui()
         self.create_settings_interface()
-        
+        self.create_help_interface()
+        self.create_about_interface()
+
         # Workers
         self.thumb_worker = None
         self.processor = ImageProcessor()
@@ -370,41 +374,21 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.main_widget, FIF.PHOTO, tr('editor'))
         setTheme(Theme.DARK)
         QApplication.instance().installEventFilter(self)
-    
-    def create_settings_interface(self):
-        self.settings_widget = QWidget()
-        settings_layout = QVBoxLayout(self.settings_widget)
-        settings_layout.setContentsMargins(40, 40, 40, 40)
-        
-        lang_card = SimpleCardWidget()
-        lang_layout = QVBoxLayout(lang_card)
-        lang_layout.addWidget(StrongBodyLabel(tr('language')))
-        
-        self.lang_combo = ComboBox()
-        self.lang_combo.addItems([tr('english'), tr('chinese')])
-        current_lang = i18n.get_current_language()
-        self.lang_combo.setCurrentIndex(1 if current_lang == 'zh' else 0)
-        self.lang_combo.currentIndexChanged.connect(self.on_language_changed)
-        lang_layout.addWidget(self.lang_combo)
-        
-        settings_layout.addWidget(SubtitleLabel(tr('settings')))
-        settings_layout.addWidget(lang_card)
-        settings_layout.addStretch()
-        
-        # Help interface
+
+    def create_about_interface(self):
+        self.about_widget = AboutPanel()
+        self.about_widget.setObjectName("aboutInterface")
+        self.addSubInterface(self.about_widget, FIF.INFO, tr('about'))
+
+    def create_help_interface(self):
         self.help_widget = HelpPanel()
         self.help_widget.setObjectName("helpInterface")
         self.addSubInterface(self.help_widget, FIF.HELP, tr('help'))
 
+    def create_settings_interface(self):
+        self.settings_widget = SettingsPanel()
         self.settings_widget.setObjectName("settingsInterface")
         self.addSubInterface(self.settings_widget, FIF.SETTING, tr('settings'))
-
-    def on_language_changed(self, index):
-        lang_code = 'en' if index == 0 else 'zh'
-        current = i18n.get_current_language()
-        if lang_code == current: return
-        i18n.set_language(lang_code)
-        QMessageBox.information(self, tr('restart_required'), tr('restart_message'))
 
     def eventFilter(self, obj, event):
         if isinstance(obj, QWidget) and obj.window() == self:

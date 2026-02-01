@@ -84,7 +84,7 @@
     "loading": "加载中...",
     "loading_thumbnails": "正在加载缩略图",
     "help": "帮助",
-    "help_title": "Raw Alchemy Studio - 用户指南",
+    "help_title": "帮助",
     "help_overview": "概述",
     "help_overview_text": "Raw Alchemy Studio 是一款专业的 RAW 图像处理应用程序，提供强大的调色和镜头校正功能。\n\n主要功能：\n• RAW 图像处理，采用高级去马赛克算法\n• 专业调色，支持 Log/LUT 工作流\n• 使用 Lensfun 数据库自动镜头校正\n• 多种测光模式的自动曝光\n• 批量导出并保留参数设置\n• 基准对比功能，用于 A/B 测试",
     "help_workflow": "基本工作流程",
@@ -103,8 +103,7 @@
     "help_export": "导出选项",
     "help_export_text": "• 导出当前：使用应用的设置保存当前图像\n  - 格式：JPEG、HEIF、TIFF\n  \n• 导出所有标记：批量导出所有标记的图像\n  - 每张图像使用其保存的参数\n  - 进度指示器显示导出状态\n  - 所有图像导出到选定的文件夹",
     "about": "关于",
-    "about_title": "关于 Raw Alchemy Studio",
-    "about_description": "Raw Alchemy Studio 是一款专业的 RAW 图像处理应用程序，专为摄影师和调色师设计。这是一个由个人开发者用心打造的开源项目，致力于为摄影爱好者提供专业级的 RAW 处理工具。",
+    "about_title": "关于",
     "about_version": "版本",
     "about_license": "许可证",
     "about_github": "GitHub 仓库",
@@ -150,5 +149,6 @@
     "aspect_ratio": "纵横比",
     "perspective_correction": "透视矫正",
     "perspective_hint": "拖动四个角点来矫正透视",
-    "loading_perspective_view": "正在加载透视矫正视图..."
+    "loading_perspective_view": "正在加载透视矫正视图...",
+    "revert_to_baseline_or_default": "撤回到基准值或默认值"
 }

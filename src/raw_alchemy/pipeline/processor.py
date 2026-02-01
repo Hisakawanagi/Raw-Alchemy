@@ -91,7 +91,6 @@ class ImageProcessor(QThread):
 
     def update_preview(self, path: str, params: dict):
         """Process image with parameters"""
-        logger.info(f"[Processor] update_preview called for {os.path.basename(path)}. Rotation={params.get('rotation')}")
         with self.lock:
             self.current_request_id += 1
             request_id = self.current_request_id

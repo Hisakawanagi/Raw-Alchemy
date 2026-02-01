@@ -13,6 +13,12 @@ from qfluentwidgets import (
     FluentIcon as FIF, ComboBox, SwitchButton
 )
 from raw_alchemy.i18n import tr
+
+
+class NoWheelSlider(Slider):
+    """Slider that ignores mouse wheel events to prevent accidental changes"""
+    def wheelEvent(self, event):
+        event.ignore()  # Let the parent handle the wheel event
 from raw_alchemy import utils
 
 class CropRotateViewer(QWidget):
@@ -84,7 +90,7 @@ class CropRotateViewer(QWidget):
         # Row 1: Rotation Slider & Flip
         row1 = QHBoxLayout()
         
-        self.rotate_slider = Slider(Qt.Orientation.Horizontal)
+        self.rotate_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.rotate_slider.setRange(-45, 45)
         self.rotate_slider.setValue(0)
         self.rotate_slider.valueChanged.connect(self._on_rotate_slider)

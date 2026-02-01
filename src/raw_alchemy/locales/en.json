@@ -84,7 +84,7 @@
     "loading": "Loading...",
     "loading_thumbnails": "Loading Thumbnails",
     "help": "Help",
-    "help_title": "Raw Alchemy Studio - User Guide",
+    "help_title": "Help",
     "help_overview": "Overview",
     "help_overview_text": "Raw Alchemy Studio is a professional RAW image processing application that provides powerful color grading and lens correction capabilities.\n\nKey Features:\n• RAW image processing with advanced demosaicing\n• Professional color grading with Log/LUT support\n• Automatic lens correction using Lensfun database\n• Multiple metering modes for auto exposure\n• Batch export with parameter preservation\n• Baseline comparison for A/B testing",
     "help_workflow": "Basic Workflow",
@@ -103,8 +103,7 @@
     "help_export": "Export Options",
     "help_export_text": "• Export Current: Save current image with applied settings\n  - Formats: JPEG, HEIF, TIFF\n  \n• Export All Marked: Batch export all tagged images\n  - Each image uses its saved parameters\n  - Progress indicator shows export status\n  - All images exported to selected folder",
     "about": "About",
-    "about_title": "About Raw Alchemy Studio",
-    "about_description": "Raw Alchemy Studio is a professional RAW image processing application designed for photographers and colorists. This is an open-source project crafted by an individual developer, dedicated to providing professional-grade RAW processing tools for photography enthusiasts.",
+    "about_title": "About",
     "about_version": "Version",
     "about_license": "License",
     "about_github": "GitHub Repository",
@@ -150,5 +149,6 @@
     "aspect_ratio": "Aspect Ratio",
     "perspective_correction": "Perspective Correction",
     "perspective_hint": "Drag the four corners to correct perspective",
-    "loading_perspective_view": "Loading perspective view..."
+    "loading_perspective_view": "Loading perspective view...",
+    "revert_to_baseline_or_default": "Revert to baseline or default"
 }

@@ -61,15 +61,6 @@ class AboutPanel(QWidget):
         title = SubtitleLabel(tr('about_title'))
         about_layout.addWidget(title)
         
-        # Description Card
-        desc_card = SimpleCardWidget()
-        desc_layout = QVBoxLayout(desc_card)
-        desc_layout.setSpacing(10)
-        desc_text = BodyLabel(tr('about_description'))
-        desc_text.setWordWrap(True)
-        desc_layout.addWidget(desc_text)
-        about_layout.addWidget(desc_card)
-        
         # Version Card with Check Update Button
         version_card = SimpleCardWidget()
         version_layout = QVBoxLayout(version_card)
@@ -217,3 +208,4 @@ class AboutPanel(QWidget):
                 InfoBar.success(tr('export_logs_success'), tr('logs_saved_to', path=save_path), parent=self)
             except Exception as e:
                 InfoBar.error(tr('export_logs_failed'), str(e), parent=self)
+
