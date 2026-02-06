@@ -9,7 +9,7 @@ from PySide6.QtCore import QThread, Signal
 from loguru import logger
 
 from raw_alchemy import utils, metering, config
-from raw_alchemy.pipeline.request import ProcessRequest
+from raw_alchemy.pipeline.request import ProcessRequest, ProcessorParams
 from raw_alchemy.pipeline.cache_manager import ImageCacheManager, CachedImage
 
 class ImageProcessor(QThread):
@@ -89,7 +89,7 @@ class ImageProcessor(QThread):
         if not self.isRunning():
             self.start()
 
-    def update_preview(self, path: str, params: dict):
+    def update_preview(self, path: str, params: ProcessorParams):
         """Process image with parameters"""
         with self.lock:
             self.current_request_id += 1
